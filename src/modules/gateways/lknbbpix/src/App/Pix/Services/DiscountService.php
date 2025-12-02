@@ -99,6 +99,8 @@ final class DiscountService
             }
         }
 
+        $invoiceBalance = $this->invoiceBalance;
+
         Logger::log(
             'Calcular desconto por pagamento via Pix',
             [
@@ -110,12 +112,12 @@ final class DiscountService
         );
 
         if ($totalDiscount !== 0) {
-            $paymentValueWithDiscount = $this->invoiceBalance - ($this->invoiceBalance * $totalDiscount);
+            $paymentValueWithDiscount = $invoiceBalance - ($invoiceBalance * $totalDiscount);
 
             return number_format($paymentValueWithDiscount, 2, '.', '');
         }
 
-        return $this->invoiceBalance;
+        return number_format($invoiceBalance, 2, '.', '');
     }
 
     /**
@@ -131,7 +133,9 @@ final class DiscountService
     {
         $invoiceValueWithDiscount = 0.0;
 
-        foreach ($this->invoiceItemsWithProductsIds as $item) {
+        $invoiceItems = $this->invoiceItemsWithProductsIds;
+
+        foreach ($invoiceItems as $item) {
             $productValue = (float) ($item['amount']);
 
             $discountPercentage = 0.0;

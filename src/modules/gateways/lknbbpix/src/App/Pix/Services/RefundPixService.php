@@ -3,7 +3,7 @@
 namespace Lkn\BBPix\App\Pix\Services;
 
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
-use Lkn\BBPix\App\Pix\PixApiRepository;
+use Lkn\BBPix\App\Pix\Repositories\PixApiRepository;
 
 final class RefundPixService
 {

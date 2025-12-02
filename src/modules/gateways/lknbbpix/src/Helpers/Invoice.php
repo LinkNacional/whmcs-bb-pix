@@ -129,4 +129,33 @@ final class Invoice
 
         return $response['result'] === 'success';
     }
+
+    public static function setStatusPaid(int $invoiceId): array
+    {
+        $postData = [
+            'invoiceid' => $invoiceId,
+            'status' => 'Paid',
+            'datepaid' => date('Y-m-d')
+        ];
+
+        $response = localAPI('UpdateInvoice', $postData);
+
+        Logger::log('Marcar fatura como paga', ['invoiceId' => $invoiceId], $response);
+
+        return $response;
+    }
+
+    public static function appendNote(int $invoiceId, string $note): void
+    {
+        $invoice = localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
+        $notes = trim((($invoice['notes'] ?? '')) . "\n" . $note);
+
+        $updateInvoiceResponse = localAPI('UpdateInvoice', ['invoiceid' => $invoiceId, 'notes' => $notes]);
+
+        Logger::log(
+            'Adicionar nota em fatura',
+            ['invoiceId' => $invoiceId, 'note' => $note],
+            ['GetInvoice' => $invoice, 'UpdateInvoice' => $updateInvoiceResponse]
+        );
+    }
 }

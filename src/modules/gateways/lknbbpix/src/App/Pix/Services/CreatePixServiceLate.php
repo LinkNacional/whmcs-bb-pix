@@ -7,7 +7,7 @@ use Exception;
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
 use Lkn\BBPix\App\Pix\Exceptions\PixException;
 use Lkn\BBPix\App\Pix\Exceptions\PixExceptionCodes;
-use Lkn\BBPix\App\Pix\PixApiRepositoryLate;
+use Lkn\BBPix\App\Pix\Repositories\PixApiRepositoryLate;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Invoice;
 use Lkn\BBPix\Helpers\Logger;
@@ -37,6 +37,67 @@ final class CreatePixServiceLate extends CreatePixService
             $pixTxId->getApiTransId(),
             $requestBody
         );
+
+        // Pós-emissão: consulta e valida juros/multa (logar somente inconsistências)
+        try {
+            $consultPixResponse = $this->pixGateway->consultPix($pixTxId);
+
+            $expectedMulta = $requestBody['valor']['multa'] ?? null;
+            $expectedJuros = $requestBody['valor']['juros'] ?? null;
+
+            $actualMulta = $consultPixResponse['valor']['multa'] ?? null;
+            $actualJuros = $consultPixResponse['valor']['juros'] ?? null;
+
+            $toNumeric = function ($cfg): float {
+                if (is_array($cfg)) {
+                    if (isset($cfg['valorPerc'])) {
+                        return (float) $cfg['valorPerc'];
+                    }
+                    if (isset($cfg['valor'])) {
+                        return (float) $cfg['valor'];
+                    }
+                }
+                return is_null($cfg) ? 0.0 : (float) $cfg;
+            };
+
+            $expectedMultaNum = $toNumeric($expectedMulta);
+            $expectedJurosNum = $toNumeric($expectedJuros);
+            $actualMultaNum = $toNumeric($actualMulta);
+            $actualJurosNum = $toNumeric($actualJuros);
+
+            $consistent = (
+                ($expectedMultaNum == 0.0 ? $actualMultaNum == 0.0 : $actualMultaNum > 0.0)
+                &&
+                ($expectedJurosNum == 0.0 ? $actualJurosNum == 0.0 : $actualJurosNum > 0.0)
+            );
+
+            if (!$consistent) {
+                Logger::log(
+                    'Emitir COBV - juros/multa INCONSISTENTE',
+                    [
+                        'txId' => $pixTxId->getApiTransId(),
+                        'expectedNumeric' => [
+                            'multa' => $expectedMultaNum,
+                            'juros' => $expectedJurosNum
+                        ],
+                        'actualNumeric' => [
+                            'multa' => $actualMultaNum,
+                            'juros' => $actualJurosNum
+                        ],
+                        'consistentWithRequest' => $consistent
+                    ],
+                    $consultPixResponse
+                );
+            }
+        } catch (\Throwable $e) {
+            Logger::log(
+                'Emitir COBV - verificação juros/multa falhou',
+                [
+                    'txId' => $pixTxId->getApiTransId(),
+                    'error' => $e->getMessage()
+                ]
+            );
+        }
 
         $addTransacResponse = Invoice::addTransac(
             Invoice::getClientId($request['invoiceId']),
@@ -70,15 +131,17 @@ final class CreatePixServiceLate extends CreatePixService
         $discountService = new DiscountService($request['invoiceId']);
         $dueDate = Invoice::getDueDate($request['invoiceId']);
 
-        $paymentValueWithDiscount = $discountService->calculate();
-
         $todayDatetime = new DateTime();
         $dueDatetime = new DateTime($dueDate);
+        $enableCalculation = Config::setting('enable_fees_calculation') ?? false;
+        $enableFeesInterest = Config::setting('enable_fees_interest') ?? false;
+
+        $paymentValueWithDiscount = $discountService->calculate();
+
         $diffDays = 0;
         $validDueDate = $dueDate;
         $fineDays = (int) Config::setting('fine_days');
         $finalFineDays = (string) $fineDays;
-        $enableCalculation = Config::setting('enable_fees_calculation') ?? false;
 
         // Cliente está gerando pix em uma fatura com data de vencimento anterior a data de hoje
         if ($dueDatetime < $todayDatetime) {
@@ -98,9 +161,7 @@ final class CreatePixServiceLate extends CreatePixService
             // Caso fatura esteja vencida além da data limite não gerar PIX
             // Caso haja um erro no cálculo de data limite não gera PIX
             if ($fineDays < $diffDays) {
-                return [
-                    'errorMsg' => 'Não foi possível gerar cobrança, data vencimento excede limite'
-                ];
+                $finalFineDays = $fineDays;
             }
         }
 
@@ -117,43 +178,34 @@ final class CreatePixServiceLate extends CreatePixService
             'chave' => Config::setting('receiver_pix_key')
         ];
 
-        $cobType = (Config::setting('cob_type') === 'fixed') ? '1' : '2';
+        $isFinePercent = (Config::setting('cob_type') !== 'fixed');
         $fineValue = Config::setting('fine') ?? '0';
         $interestValue = Config::setting('interest_rate') ?? '0';
 
-        // Verifica se há um valor de multa definido
-        if ($fineValue !== '0') {
-            // Caso geração de fatura seja anterior a data de emissão da fatura
-            if ($diffDays > 0) {
-                // Gera PIX com multa já calculada
-                $requestBody['valor']['original'] = (float) $requestBody['valor']['original'] + ((float) $fineValue * $diffDays);
-                $requestBody['valor']['original'] = number_format($requestBody['valor']['original'], 2, '.', '');
-            } else {
-                // Continua a fazer a requisição com o cálculo de juros/multa
+        // Aplica configuração de multa quando habilitado e informado
+        if ($enableFeesInterest && $fineValue !== '0') {
+            if ($isFinePercent) {
+                // Percentual
                 $requestBody['valor']['multa'] = [
-                    'modalidade' => $cobType,
-                    'valor' => $fineValue
+                    'modalidade' => 2,
+                    'valorPerc' => number_format((float) $fineValue, 2, '.', '')
+                ];
+            } else {
+                // Fixo
+                $requestBody['valor']['multa'] = [
+                    'modalidade' => 1,
+                    'valor' => number_format((float) $fineValue, 2, '.', '')
                 ];
             }
         }
 
-        // Verifica se há um valor de juros definido
-        if ($interestValue !== '0') {
-            // Caso geração de fatura seja anterior a data de emissão da fatura
-            if ($diffDays > 0) {
-                // Gera PIX com multa já calculada
-                $tempAmount = (float) $requestBody['valor']['original'] * ((float) $interestValue / 100);
-                $tempAmount = $diffDays * $tempAmount;
-
-                $requestBody['valor']['original'] = (float) $requestBody['valor']['original'] + $tempAmount;
-                $requestBody['valor']['original'] = number_format($requestBody['valor']['original'], 2, '.', '');
-            } else {
-                // Continua a fazer a requisição com o cálculo de juros/multa
-                $requestBody['valor']['juros'] = [
-                    'modalidade' => '1',
-                    'valor' => $interestValue
-                ];
-            }
+        // Aplica configuração de juros quando habilitado e informado
+        if ($enableFeesInterest && $interestValue !== '0') {
+            // Juros percentual ao dia
+            $requestBody['valor']['juros'] = [
+                'modalidade' => 2,
+                'valorPerc' => number_format((float) $interestValue, 2, '.', '')
+            ];
         }
 
         if (

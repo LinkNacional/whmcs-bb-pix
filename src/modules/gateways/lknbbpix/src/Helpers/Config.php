@@ -57,6 +57,7 @@ final class Config
             'cpf_cf_id' => (int) ($value),
             'send_payer_doc_and_name' => (bool) ($value),
             'enable_pix_when_invoice_cancel' => is_null($value) ? true : ((bool) $value),
+            'enable_pix_cancel_when_invoice_cancel' => (bool) $value,
             'discount_for_pix_payment_percentage' => ((float) $value) / 100,
             'ruled_discount_percentage' => ((float) $value) / 100,
             'receiver_pix_key' => self::formatReceiverPixKey($value),
@@ -73,8 +74,43 @@ final class Config
             'fine' => is_numeric($value) ? $value : '0',
             'fine_days' => is_numeric($value) ? $value : '1',
             'enable_fees_calculation' => (bool) $value,
+            
+            'transaction_fee' => is_numeric($value) ? (float) $value : 0.0,
+            'autopix_charge_days' => self::parseAttemptOffsets($value),
+            'autopix_retry_failure_log_activity' => (bool) $value,
+            'autopix_split' => (bool) $value,
             default => trim($value)
         };
+    }
+
+    private static function parseAttemptOffsets(mixed $value): array
+    {
+        $raw = trim((string) $value);
+
+        if ($raw === '') {
+            $raw = '-7,-3,0';
+        }
+
+        $parts = explode(',', $raw);
+        $offsets = [];
+
+        foreach ($parts as $part) {
+            $int = (int) trim($part);
+
+            if ($int < -7 || $int > 0) {
+                continue;
+            }
+
+            $offsets[$int] = $int;
+        }
+
+        if (empty($offsets)) {
+            $offsets = [-7 => -7, 0 => 0];
+        }
+
+        ksort($offsets);
+
+        return array_slice(array_values($offsets), 0, 3);
     }
 
     /**
@@ -86,6 +122,22 @@ final class Config
      */
     private static function formatReceiverPixKey(string $key): string
     {
+        // Trim whitespace
+        $key = trim($key);
+        
+        // Check if it's a random PIX key (EVP/UUID format)
+        // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        $uuid_pattern = '/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i';
+        if (preg_match($uuid_pattern, $key)) {
+            return strtolower($key); // Keep hyphens, just normalize to lowercase
+        }
+        
+        // Check if it's a UUID without hyphens (32 hex chars)
+        $uuid_no_hyphens = '/^[a-f0-9]{32}$/i';
+        if (preg_match($uuid_no_hyphens, $key)) {
+            return strtolower($key); // Keep as is, normalize to lowercase
+        }
+        
         // Check if it's a valid CPF or CNPJ
         $cpf_cnpj_pattern = '/^(\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})$|^(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})$/';
 

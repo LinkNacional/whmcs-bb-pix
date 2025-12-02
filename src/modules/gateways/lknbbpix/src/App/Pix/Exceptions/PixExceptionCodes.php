@@ -17,6 +17,7 @@ enum PixExceptionCodes
     case INVALID_CPF;
     case INVALID_CNPJ;
     case INVALID_DUE_DATE;
+    case COULD_NOT_CANCEL_PIX;
 
     public function label(): string
     {
@@ -34,6 +35,7 @@ enum PixExceptionCodes
             PixExceptionCodes::INVALID_CPF => 'CPF inválido.',
             PixExceptionCodes::INVALID_CNPJ => 'CNPJ inválido.',
             PixExceptionCodes::INVALID_DUE_DATE => 'Não foi possível gerar o PIX, fatura está vencida entre em contato com o financeiro',
+            PixExceptionCodes::COULD_NOT_CANCEL_PIX => 'Não foi possível cancelar o Pix.',
             default => 'Erro não identificado.'
         };
     }

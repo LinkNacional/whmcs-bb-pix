@@ -1,7 +1,7 @@
 <?php
 
 use Lkn\BBPix\App\Pix\Exceptions\PixException;
-use Lkn\BBPix\App\Pix\PixController;
+use Lkn\BBPix\App\Pix\Controllers\PixController;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Formatter;
 use Lkn\BBPix\Helpers\Invoice;
@@ -50,14 +50,136 @@ function lknbbpix_config()
                     /** @var Illuminate\Database\Schema\Blueprint $table */
                     $table->increments('id');
                     $table->unsignedSmallInteger('product_id')->unique();
-                    $table->unsignedDecimal('percentage', 5, 2);
+                    $table->decimal('percentage', 5, 2)->unsigned();
                     $table->dateTime('created_at')->useCurrent();
                     $table->dateTime('updated_at')->useCurrent();
                 }
             );
         }
+
+        // AutoPix tables
+        $schema = Capsule::schema();
+
+        if (!$schema->hasTable('mod_lknbbpix_auto_consents')) {
+            $schema->create(
+                'mod_lknbbpix_auto_consents',
+                function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->increments('id');
+                    $table->integer('clientid');
+                    $table->integer('serviceid')->nullable();
+                    $table->integer('domainid')->nullable();
+                    $table->enum('type', ['service', 'domain']);
+                    $table->enum('status', ['pending', 'active', 'revoked', 'blocked']);
+                    $table->string('psp_consent_id', 191);
+                    $table->string('id_rec', 64)->nullable();
+                    $table->string('id_rec_tipo', 4)->nullable();
+                    $table->dateTime('created_at');
+                    $table->dateTime('updated_at')->nullable();
+                    $table->dateTime('confirmed_at')->nullable();
+                    $table->dateTime('revoked_at')->nullable();
+                    $table->dateTime('last_notified_at')->nullable();
+                    $table->text('metadata')->nullable();
+                    $table->index('clientid');
+                    $table->index('serviceid');
+                    $table->index('domainid');
+                    $table->index('psp_consent_id');
+                    $table->index('id_rec');
+                    $table->index('id_rec_tipo');
+                }
+            );
+        } else {
+            if (!$schema->hasColumn('mod_lknbbpix_auto_consents', 'id_rec')) {
+                $schema->table('mod_lknbbpix_auto_consents', function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->string('id_rec', 64)->nullable()->after('psp_consent_id');
+                });
+            }
+
+            if (!$schema->hasColumn('mod_lknbbpix_auto_consents', 'id_rec_tipo')) {
+                $schema->table('mod_lknbbpix_auto_consents', function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->string('id_rec_tipo', 4)->nullable()->after('id_rec');
+                });
+            }
+
+            if (!$schema->hasColumn('mod_lknbbpix_auto_consents', 'updated_at')) {
+                $schema->table('mod_lknbbpix_auto_consents', function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->dateTime('updated_at')->nullable()->after('created_at');
+                });
+            }
+
+            $connection = Capsule::connection();
+            $indexes = $connection->select("SHOW INDEX FROM mod_lknbbpix_auto_consents");
+            $indexNames = array_map(static function ($index) {
+                return $index->Key_name;
+            }, $indexes);
+
+            if (!in_array('mod_lknbbpix_auto_consents_id_rec_index', $indexNames, true)) {
+                try {
+                    Capsule::statement('CREATE INDEX mod_lknbbpix_auto_consents_id_rec_index ON mod_lknbbpix_auto_consents (id_rec)');
+                } catch (Exception $e) {
+                    // ignore if already exists
+                }
+            }
+
+            if (!in_array('mod_lknbbpix_auto_consents_id_rec_tipo_index', $indexNames, true)) {
+                try {
+                    Capsule::statement('CREATE INDEX mod_lknbbpix_auto_consents_id_rec_tipo_index ON mod_lknbbpix_auto_consents (id_rec_tipo)');
+                } catch (Exception $e) {
+                    // ignore if already exists
+                }
+            }
+        }
+
+        if (!$schema->hasTable('mod_lknbbpix_auto_instructions')) {
+            $schema->create(
+                'mod_lknbbpix_auto_instructions',
+                function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->increments('id');
+                    $table->integer('invoice_id');
+                    $table->integer('consent_id');
+                    $table->unsignedTinyInteger('attempt_number')->default(1);
+                    $table->enum('finalidade', ['AGND', 'NTAG', 'RIFL'])->default('AGND');
+                    $table->date('scheduled_date');
+                    $table->string('id_fim_a_fim', 64);
+                    $table->decimal('amount', 10, 2);
+                    $table->enum('status', ['pending', 'scheduled', 'liquidated', 'failed', 'cancelled'])->default('pending');
+                    $table->longText('api_response')->nullable();
+                    $table->dateTime('created_at')->useCurrent();
+                    $table->dateTime('updated_at')->nullable();
+                    $table->unique('id_fim_a_fim', 'idx_instr_id_fim_a_fim');
+                    $table->index('invoice_id', 'idx_instr_invoice');
+                    $table->index('consent_id', 'idx_instr_consent');
+                    $table->index('status', 'idx_instr_status');
+                    $table->index('scheduled_date', 'idx_instr_scheduled_date');
+                }
+            );
+        }
+
+        if (!Capsule::schema()->hasTable('mod_lknbbpix_webhook_events')) {
+            Capsule::schema()->create(
+                'mod_lknbbpix_webhook_events',
+                function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->increments('id');
+                    $table->string('event_id', 191);
+                    $table->string('event_type', 100);
+                    $table->dateTime('received_at');
+                    $table->dateTime('processed_at')->nullable();
+                    $table->enum('status', ['received', 'processed', 'failed']);
+                    $table->text('payload')->nullable();
+                    $table->unique('event_id');
+                    $table->index('event_type');
+                    $table->index('status');
+                    $table->index('received_at');
+                }
+            );
+        }
     } catch (Exception $e) {
-        echo "Unable to create mod_lknbbpix_discount_per_product: {$e->getMessage()}";
+        echo "Unable to create gateway tables: {$e->getMessage()}";
     }
 
     $whmcsInstallUrl = rtrim(Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value'), '/');
@@ -71,6 +193,14 @@ function lknbbpix_config()
     );
 
     $apiUrl = "$whmcsInstallUrl/modules/gateways/lknbbpix/api.php";
+
+    $currentSettings = getGatewayVariables('lknbbpix');
+    $consentFallbackValue = $currentSettings['autopix_consent_fallback_method']
+        ?? ($currentSettings['autopix_revoke_fallback_method'] ?? 'default');
+    $retryFallbackValue = $currentSettings['autopix_retry_failure_method'] ?? 'default';
+    $attemptOffsetsValue = $currentSettings['autopix_charge_days'] ?? '-7,-3,0';
+    $splitInvoicesDefault = $currentSettings['autopix_split']
+        ?? ($currentSettings['autopix_split_experimental'] ?? '');
 
     return [
         'FriendlyName' => [
@@ -124,13 +254,13 @@ HTML
             'Description' => 'As operações realizadas pelo gateway estarão vísíveis em <a href="https://whmcs.linknacional.com.br/admin/gatewaylog.php">Log dos Portais</a> para detecção de erros.'
         ],
 
-        'developer_application_key' => [
-            'FriendlyName' => 'developer_application_key *',
+        'application_key' => [
+            'FriendlyName' => 'application_key *',
             'Type' => 'password',
             'Size' => '25',
             'Description' => <<<HTML
             <a href="https://apoio.developers.bb.com.br/referency/post/6050dda3737e1c0012e2d00e">
-                Clique aqui para saber como conseguir a developer_application_key.
+                Clique aqui para saber como conseguir a application_key.
             </a>
             HTML
         ],
@@ -170,9 +300,9 @@ HTML
 
         'receiver_pix_key' => [
             'FriendlyName' => 'Chave do recebedor *',
-            'Description' => 'Coloque aqui a sua chave registrada no BB que irá receber os pagamentos.',
+            'Description' => 'Coloque aqui a sua chave registrada no BB que irá receber os pagamentos. Aceita CPF, CNPJ, telefone, e-mail ou chave aleatória (EVP).',
             'Type' => 'text',
-            'Size' => '25'
+            'Size' => '40'
         ],
 
         'pix_expiration' => [
@@ -189,6 +319,20 @@ HTML
                 Personalização
             </div>
 HTML
+        ],
+
+        'autopix_merchant_name' => [
+            'FriendlyName' => 'Nome do recebedor (PIX Automático)',
+            'Type' => 'text',
+            'Size' => '40',
+            'Description' => 'Nome exibido no BR Code das cobranças AutoPix. Deixe em branco para usar o nome configurado em Configurações Gerais do WHMCS.'
+        ],
+
+        'autopix_merchant_city' => [
+            'FriendlyName' => 'Cidade do recebedor (PIX Automático)',
+            'Type' => 'text',
+            'Size' => '40',
+            'Description' => 'Cidade exibida no BR Code das cobranças AutoPix. Deixe em branco para usar a cidade configurada em Configurações Gerais do WHMCS.'
         ],
 
         'pix_descrip' => [
@@ -281,6 +425,14 @@ HTML
             'Description' => 'Essa configuração existe pois há a possibilidade de o webhook do Banco do Brasil não notificar o gateway que o Pix foi pago, o que pode gerar pagamentos duplicados.'
         ],
 
+        'enable_pix_cancel_when_invoice_cancel' => [
+            'FriendlyName' => 'Verificar e cancelar PIX ao cancelar fatura',
+            'Type' => 'yesno',
+            'Default' => 'no',
+            'Description' => 'Além de verificar se o PIX foi pago, também cancela automaticamente PIX pendentes quando a fatura é cancelada. Quando ambas as opções estão marcadas, esta configuração tem prioridade.'
+        ],
+
+        
         'discount_settings' => [
             'Description' => <<<HTML
             <div style="margin: 20px 0px 10px; font-weight: bold; font-size: 1.1em;">
@@ -410,6 +562,92 @@ HTML
             'Default' => '1',
             'Description' => 'Por quantos dias após o vencimento é permitida a cobrança.'
         ],
+        
+        'transaction_fee' => [
+            'FriendlyName' => 'Taxa transacional (R$)',
+            'Type' => 'text',
+            'Size' => '10',
+            'Default' => '0',
+            'Description' => 'Taxa fixa aplicada como fee em toda transação com prefixo PAGO.'
+        ],
+
+        'autopix_settings' => [
+            'Description' => <<<HTML
+            <div style="margin: 20px 0px 10px; font-weight: bold; font-size: 1.1em;">
+                Configurações de PIX Automático
+            </div>
+HTML
+        ],
+
+        'autopix_consent_fallback_method' => [
+            'FriendlyName' => 'Método ao revogar consentimento PIX Automático',
+            'Type' => 'dropdown',
+            'Size' => '25',
+            'Default' => 'default',
+            'Options' => [
+                'default' => 'Método padrão do cliente',
+                'lknbbpix' => 'PIX Convencional (lknbbpix)',
+                'none' => 'Não alterar método de pagamento'
+            ],
+            'Description' => 'Define qual método de pagamento será atribuído ao serviço/domínio quando o consentimento PIX Automático for revogado pelo cliente.',
+            'Value' => $consentFallbackValue
+        ],
+
+        'autopix_retry_failure_method' => [
+            'FriendlyName' => 'Método após tentativas PIX Automático sem sucesso',
+            'Type' => 'dropdown',
+            'Size' => '25',
+            'Default' => 'default',
+            'Options' => [
+                'default' => 'Método padrão do cliente',
+                'lknbbpix' => 'PIX Convencional (lknbbpix)',
+                'none' => 'Não alterar método de pagamento'
+            ],
+            'Description' => 'Define qual método de pagamento será atribuído à fatura quando todas as tentativas automáticas falharem. O consentimento permanece ativo.',
+            'Value' => $retryFallbackValue
+        ],
+
+        'autopix_charge_days' => [
+            'FriendlyName' => 'Tentativas (offsets antes do vencimento)',
+            'Type' => 'text',
+            'Size' => '25',
+            'Default' => '-7,-3,0',
+            'Description' => 'Informe até três offsets (entre -7 e 0) para as tentativas automáticas. O valor 0 representa o dia do vencimento; -7 representa 7 dias antes. A primeira tentativa só será enviada quando a janela regulatória (2 a 10 dias antes da liquidação) estiver aberta.',
+            'Value' => $attemptOffsetsValue
+        ],
+
+        'autopix_charge_notification_template' => [
+            'FriendlyName' => 'Template de e-mail (PIX Automático)',
+            'Type' => 'text',
+            'Size' => '50',
+            'Default' => 'AutoPix Charge Notification',
+            'Description' => 'Nome do template de e-mail do WHMCS usado para notificar o cliente em cada tentativa de cobrança automática.'
+        ],
+
+        'autopix_retry_failure_log_activity' => [
+            'FriendlyName' => 'Registrar log ao falhar tentativas',
+            'Type' => 'yesno',
+            'Default' => 'yes',
+            'Description' => 'Quando todas as tentativas automáticas falharem, registrar entrada em Log de Atividades do cliente.'
+        ],
+
+        'autopix_split' => [
+            'FriendlyName' => 'Separar itens AutoPix em faturas distintas',
+            'Type' => 'yesno',
+            'Default' => '',
+            'Description' => 'Ao gerar faturas com método AutoPix, criar faturas independentes por item para evitar suspensão conjunta. Requer cron diário atualizado. (experimental)',
+            'Value' => $splitInvoicesDefault,
+        ],
+
+        'autopix_cron_notice' => [
+            'Description' => <<<HTML
+            <div class="fieldlabel">CRON AutoPix</div>
+            <div class="fieldarea" style="line-height: 1.6;">
+                <strong>Importante:</strong> agende a execução diária do script <code>modules/gateways/lknbbpix/cron/autopix_charge.php</code>.<br>
+                Exemplo de CRON: <code>0 6 * * * php -q /path/to/whmcs/modules/gateways/lknbbpix/cron/autopix_charge.php</code>
+            </div>
+HTML
+        ],
     ];
 }
 
@@ -438,15 +676,6 @@ function lknbbpix_link($params): string
     }
 
     try {
-        $isLicenseValid = lknbbpix_check_license();
-
-        if ($isLicenseValid !== true) {
-            return View::render(
-                'form.index',
-                ['errorMsg' => $isLicenseValid]
-            );
-        }
-
         $invoiceId = $params['invoiceid'];
         $invoice = localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
         $paymentValue = $invoice['balance'];
@@ -510,13 +739,19 @@ function lknbbpix_link($params): string
 
         $clientId = $params['clientdetails']['client_id'];
 
-        if ($payerDocType === 'cnpj') {
-            $clientFullName = $params['clientdetails']['companyname'];
-        } else {
-            $firstName = $params['clientdetails']['firstname'];
-            $lastName = $params['clientdetails']['lastname'];
+        $firstName = $params['clientdetails']['firstname'];
+        $lastName = $params['clientdetails']['lastname'];
+        $fullNameFromNames = substr(trim("$firstName $lastName"), 0, 200);
 
-            $clientFullName = substr(trim("$firstName $lastName"), 0, 200);
+        if ($payerDocType === 'cnpj') {
+            $clientFullName = trim($params['clientdetails']['companyname']);
+
+            if ($clientFullName === '') {
+                // Company name was left blank even though the client uses CNPJ; fallback to the personal name.
+                $clientFullName = $fullNameFromNames;
+            }
+        } else {
+            $clientFullName = $fullNameFromNames;
         }
 
         $cobType = Config::setting('enable_fees_interest') ? 'cobv' : 'cob';
@@ -534,7 +769,7 @@ function lknbbpix_link($params): string
             return View::render('form.index', ['errorMsg' => $response['data']['error']]);
         }
 
-        $csrfToken = bin2hex(random_bytes(32));
+        $csrfToken = bin2hex(openssl_random_pseudo_bytes(32));
         $_SESSION['lkn-bb-pix'] = $csrfToken;
 
         $pixValue = $response['data']['pixValue'];

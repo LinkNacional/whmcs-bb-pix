@@ -104,7 +104,7 @@ final class PixTaxId
 
     public function setSuffix(?string $suffix = null): self
     {
-        $this->suffix = $suffix === null ? bin2hex(random_bytes(13)) : $suffix;
+        $this->suffix = $suffix === null ? bin2hex(openssl_random_pseudo_bytes(13)) : $suffix;
 
         return $this;
     }

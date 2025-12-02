@@ -87,4 +87,33 @@ final class Validator
         }
         return true;
     }
+
+    /**
+     * Valida se é uma chave PIX aleatória (EVP)
+     * Chaves aleatórias seguem o formato UUID v4
+     * 
+     * @param string $key
+     * @return bool
+     */
+    public static function pixRandomKey(string $key): bool
+    {
+        // Remove espaços em branco
+        $key = trim($key);
+        
+        // Valida formato UUID (36 caracteres com hífens ou 32 sem)
+        // Formato: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        $uuidPattern = '/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i';
+        
+        if (preg_match($uuidPattern, $key)) {
+            return true;
+        }
+        
+        // Também aceita sem os hífens (32 caracteres)
+        $uuidPatternNoHyphens = '/^[a-f0-9]{32}$/i';
+        if (preg_match($uuidPatternNoHyphens, $key)) {
+            return true;
+        }
+        
+        return false;
+    }
 }

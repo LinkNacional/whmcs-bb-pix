@@ -6,7 +6,7 @@ use Exception;
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
 use Lkn\BBPix\App\Pix\Exceptions\PixException;
 use Lkn\BBPix\App\Pix\Exceptions\PixExceptionCodes;
-use Lkn\BBPix\App\Pix\PixApiRepository;
+use Lkn\BBPix\App\Pix\Repositories\PixApiRepository;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Invoice;
 use Lkn\BBPix\Helpers\Validator;

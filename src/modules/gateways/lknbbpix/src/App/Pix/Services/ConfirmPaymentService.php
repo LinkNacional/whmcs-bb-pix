@@ -6,6 +6,7 @@ use DateTime;
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
 use Lkn\BBPix\Helpers\Invoice;
 use Lkn\BBPix\Helpers\Logger;
+use Lkn\BBPix\Helpers\Config;
 
 /**
  * Responsible for making the required operations to set an invoice as paid.
@@ -26,8 +27,6 @@ final class ConfirmPaymentService
         $invoiceLastTransaction = Invoice::getTransactionByTransactionId($invoiceId, 'PAGOx' . $pixTaxId->suffix . 'x' . $pixEndToEndId);
         $totalResults = (int) $invoiceLastTransaction['totalresults'] ?? 0;
 
-        // Para evitar que um mesmo pedido seja pago múltiplas vezes
-        // Com isso a verificação do webhook e do front-end não duplicam o pagamento
         if ($totalResults > 0) {
             $this->addNoteToInvoice(
                 $invoiceId,
@@ -36,27 +35,23 @@ final class ConfirmPaymentService
             return;
         }
 
-        $invoiceBalance = Invoice::getBalance($invoiceId);
-        $invoiceBalance = bcadd($invoiceBalance, '0.005', 2);
-
-        $paidAmount = bcadd($paidAmount, '0.005', 2);
+        // Trabalhar em centavos para evitar flutuações de ponto flutuante
+        $invoiceBalanceCents = $this->toCents(Invoice::getBalance($invoiceId));
+        $paidCents = $this->toCents($paidAmount);
 
         // TODO Ideal seria verificar taxa de desconto do pedido
-        if ($paidAmount < $invoiceBalance) {
-            $discount = $this->getDiscountValue($paidAmount, $invoiceBalance);
+        if ($paidCents < $invoiceBalanceCents) {
+            $discount = $this->getDiscountValue($this->fromCents($paidCents), $this->fromCents($invoiceBalanceCents));
             $discountService = new DiscountService($invoiceId);
             $paymentValueWithDiscount = (float) $discountService->calculate();
-            $paymentValueWithDiscount = bcadd($paymentValueWithDiscount, '0.005', 2);
+            $paymentValueWithDiscountCents = $this->toCents($paymentValueWithDiscount);
 
             $discountAmount = $discount['discountAmount'];
             $discountPercentage = $discount['discountPercentage'];
 
             $addDiscountResponse = false;
-            // Valida se valor pago com desconto é equivalente
-            // Ao valor recebido via webhook
-            // TODO fazer calculo com números inteiros e não comparar strings
-            // Usar bcmath
-            if ($paymentValueWithDiscount === $paidAmount) {
+            // Aplica desconto somente se bater exatamente em centavos
+            if ($paymentValueWithDiscountCents === $paidCents) {
                 $addDiscountResponse = Invoice::addDiscount(
                     $invoiceId,
                     $discountAmount,
@@ -64,18 +59,18 @@ final class ConfirmPaymentService
                 );
             }
 
-            if (!$addDiscountResponse && $paymentValueWithDiscount === $paidAmount) {
+            if (!$addDiscountResponse && $paymentValueWithDiscountCents === $paidCents) {
                 $this->addNoteToInvoice(
                     $invoiceId,
-                    "Pix: erro ao adicionar desconto de R$ {$discountAmount} à fatura"
+                    "Pix: erro ao adicionar desconto de R$ " . number_format($discountAmount, 2, ',', '.') . " à fatura"
                 );
             }
         }
 
         // TODO ideal seria verificar se o pagamento teve juros
-        if ($paidAmount > $invoiceBalance) {
-            $tax = $this->getTaxValue($paidAmount, $invoiceBalance);
-            $taxAmount = $tax['taxAmount'] ?? 0;
+        if ($paidCents > $invoiceBalanceCents) {
+            $tax = $this->getTaxValue($this->fromCents($paidCents), $this->fromCents($invoiceBalanceCents));
+            $taxAmount = $tax['taxAmount'] ?? 0.0;
             $taxAmountLabel = number_format($taxAmount, 2, ',', '.');
 
             $addTaxResponse = Invoice::addTax(
@@ -97,15 +92,23 @@ final class ConfirmPaymentService
 
         $whmcsPaymentDate = (new DateTime($paymentDate))->format('d/m/Y');
 
+        // Taxa transacional configurável aplicada como fee nas transações PAGO
+        $transactionFee = (float) (Config::setting('transaction_fee') ?? 0.0);
+        if ($transactionFee < 0) {
+            $transactionFee = 0.0;
+        }
+
         $addTranscResponse = Invoice::addTransac(
             $invoiceClientId,
             $invoiceId,
             $whmcsTransacId,
-            $paidAmount,
-            $whmcsPaymentDate
+            $this->fromCents($paidCents),
+            $whmcsPaymentDate,
+            '',
+            $transactionFee
         );
 
-        if ($addTranscResponse['result'] !== 'success') {
+        if (($addTranscResponse['result'] ?? null) !== 'success') {
             $this->addNoteToInvoice(
                 $invoiceId,
                 'Pix: erro ao adicionar transação à fatura'
@@ -114,7 +117,7 @@ final class ConfirmPaymentService
 
         $setInvoiceAsPaidResponse = [];
 
-        if ($paidAmount >= $invoiceBalance) {
+        if ($paidCents >= $invoiceBalanceCents) {
             $setInvoiceAsPaidResponse = $this->setInvoiceAsPaid($invoiceId);
         }
 
@@ -132,7 +135,7 @@ final class ConfirmPaymentService
     ): array {
         $discountAmount = $paidAmount - $invoiceBalance;
 
-        $discountPercentage = abs(($discountAmount / $invoiceBalance) * 100);
+        $discountPercentage = abs(($discountAmount / max($invoiceBalance, 0.01)) * 100);
         $discountPercentage = number_format($discountPercentage, 2, ',', '.');
 
         return [
@@ -160,7 +163,7 @@ final class ConfirmPaymentService
             'datepaid' => date('Y-m-d')
         ];
 
-        $response = localAPI('UpdateInvoice', $postData);
+        $response = \localAPI('UpdateInvoice', $postData);
 
         Logger::log(
             'Adicionar nota sobre desconto',
@@ -173,11 +176,11 @@ final class ConfirmPaymentService
 
     private function addNoteToInvoice(int $invoiceId, string $note): void
     {
-        $invoice = localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
+        $invoice = \localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
 
-        $notes = trim($invoice['notes'] . "\n" . $note);
+        $notes = trim(($invoice['notes'] ?? '') . "\n" . $note);
 
-        $updateInvoiceResponse = localAPI(
+        $updateInvoiceResponse = \localAPI(
             'UpdateInvoice',
             ['invoiceid' => $invoiceId, 'notes' => $notes]
         );
@@ -187,5 +190,17 @@ final class ConfirmPaymentService
             ['invoiceId' => $invoiceId, 'note' => $note],
             ['GetInvoice' => $invoice, 'UpdateInvoice' => $updateInvoiceResponse]
         );
+    }
+
+    private function toCents(float|string $value): int
+    {
+        // Aceita string "617.90" ou float 617.9; converte para centavos inteiros com arredondamento padrão
+        $floatVal = (float) $value;
+        return (int) round($floatVal * 100, 0);
+    }
+
+    private function fromCents(int $cents): float
+    {
+        return round($cents / 100, 2);
     }
 }

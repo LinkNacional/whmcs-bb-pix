@@ -1,0 +1,26 @@
+{
+    "schema": "1.0.0",
+    "type": "whmcs-gateways",
+    "name": "lknbbpix_auto",
+    "license": "proprietary",
+    "category": "payments",
+    "description": {
+        "name": "Pix - Banco do Brasil (Auto)",
+        "tagline": "Módulo gateway de pagamento via Pix do Banco do Brasil.",
+        "long": "",
+        "features": []
+    },
+    "logo": {
+        "filename": "logo.png"
+    },
+    "support": {
+        "homepage": "https://www.linknacional.com.br/",
+        "email": "ticket@linknacional.com.br"
+    },
+    "authors": [
+        {
+            "name": "Link Nacional",
+            "homepage": "https://www.linknacional.com.br/"
+        }
+    ]
+}
