@@ -38,7 +38,7 @@ final class PixTaxId
     {
         $txId = new PixTaxId();
 
-        $txId->setInvoiceId($invoiceId);
+        $txId->setInvoiceId((int) $invoiceId);
         $txId->setPrefix($prefix);
         $txId->setSuffix();
 
@@ -81,7 +81,7 @@ final class PixTaxId
 
         $txId = new PixTaxId();
 
-        $txId->setInvoiceId($exploded[0]);
+        $txId->setInvoiceId((int) $exploded[0]);
         $txId->setSuffix($exploded[1]);
         $txId->setPrefix($prefix);
 
