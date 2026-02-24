@@ -39,7 +39,7 @@ final class Invoice
     {
         $invoice = localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
 
-        return $invoice['balance'];
+        return (float) ($invoice['balance'] ?? 0.0);
     }
 
     public static function getDueDate(int $invoiceId): string
