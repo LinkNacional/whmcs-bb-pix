@@ -12,7 +12,7 @@ O projeto é de propriedade da **Link Nacional** e utiliza o prefixo `lkn` / `Lk
 
 | Tecnologia | Versão mínima | Função |
 |---|---|---|
-| PHP | 8.1 | Toda a lógica de backend |
+| PHP | 8.3 | Toda a lógica de backend |
 | WHMCS | 8.6+ | Plataforma de cobrança integrada |
 | Banco do Brasil Pix API | v2 | API externa de pagamentos |
 | Composer | — | Gerenciamento de dependências PHP |
@@ -32,15 +32,18 @@ src/
 │   └── lknbbpix/                     # Pacote principal do módulo
 │       ├── api.php                   # Endpoint AJAX interno
 │       ├── webhook.php               # Receptor de webhook da BB (confirmação automática)
+│       ├── webhookrec.php            # Webhook de autorização Pix Automático (status do idRec)
+│       ├── webhookcobr.php           # Webhook de cobrança Pix Automático (liquidação/falha)
 │       ├── certs/                    # Certificados mTLS (public.key, private.key)
 │       ├── composer.json             # Dependências PHP
 │       └── src/
-│           ├── constants.php         # URLs da API BB (sandbox e produção), versão
+│           ├── constants.php         # URLs da API BB (hml sem mTLS, hml com mTLS e produção), versão
 │           ├── utils.php             # Funções utilitárias globais
 │           ├── App/Pix/              # Lógica de aplicação principal
 │           │   ├── PixController.php
 │           │   ├── PixApiRepository.php      # Chamadas à API BB (cob — cobrança imediata)
 │           │   ├── PixApiRepositoryLate.php  # Chamadas à API BB (cobv — cobrança pós-vencimento)
+│           │   ├── PixAutoRepository.php     # Chamadas à API BB para rec/locrec/cobr
 │           │   ├── Entity/PixTaxId.php       # Codificação/decodificação de IDs de transação
 │           │   ├── Exceptions/               # PixException + PixExceptionCodes (enum)
 │           │   ├── Controllers/              # ApiController, DiscountController
@@ -80,12 +83,13 @@ O código segue uma arquitetura em camadas dentro de `App/Pix/`:
 | **Entity** | `App/Pix/Entity/` | Objetos de domínio imutáveis (ex.: `PixTaxId`) |
 | **Helper** | `Helpers/` | Utilitários estáticos reutilizáveis (sem estado) |
 
-### Dois Modos de Cobrança
+### Modos de Cobrança
 
 | Modo | Classe Repository | Endpoint BB | Quando usar |
 |---|---|---|---|
 | `cob` | `PixApiRepository` | `PUT /cob/{txId}` | Cobrança imediata (padrão) |
 | `cobv` | `PixApiRepositoryLate` | `PUT /cobv/{txId}` | Cobrança com vencimento + juros/multa |
+| `cobr` | `PixAutoRepository` | `PUT /cobr/{txId}` | Cobrança Pix Automático para fatura já autorizada |
 
 O `PixController` recebe o parâmetro `$cobType` no construtor e instancia o repositório correto.
 
@@ -101,6 +105,10 @@ Sempre crie `PixTaxId` via seus métodos de fábrica estáticos:
 - `PixTaxId::create($invoiceId, 'CRIADO')` — para criar um novo Pix
 - `PixTaxId::fromWhmcsTransId($transacId, $invoiceId)` — ao ler do WHMCS
 - `PixTaxId::fromApi('PAGO', $apiTxId)` — ao receber resposta da API
+
+> Regra para Pix Automático (`/cobr`): a idempotência deve usar o `txid` exigido pelo BB.
+> O módulo deve gerar `txid` determinístico (26 a 35 caracteres alfanuméricos) derivado do `invoice_id`.
+> Não usar chave arbitrária paralela para deduplicação da cobrança automática.
 
 ---
 
@@ -172,6 +180,33 @@ Pix pago → webhook.php OU polling do frontend → ConfirmPaymentService::run()
   └─ UpdateInvoice status → "Paid"
 ```
 
+## Fluxo Pix Automático (BB v2)
+
+```
+Cliente abre fatura (WHMCS) → valida autorização em mod_lknbbpix_auths por client_id + due_day
+  ├─ Se existir idRec APROVADA: agenda cobrança automática via PUT /cobr/{txid_deterministico}
+  │   ├─ politicaRetentativa já definida como NAO_PERMITE no consentimento
+  │   └─ mantém invoice como Unpaid até webhookcobr com liquidação
+  └─ Se não existir idRec APROVADA: oferece Jornada 4
+      ├─ cria cobrança da fatura (cob/cobv)
+      ├─ cria location de recorrência (POST /locrec)
+      ├─ cria consentimento (POST /rec)
+      ├─ persiste idRec como CRIADA
+      └─ exibe QR Code composto para aceite no app bancário
+
+Cliente aceita no app → webhookrec.php atualiza status da autorização para APROVADA/CANCELADA
+
+No vencimento (D) → webhookcobr.php
+  ├─ CONCLUIDA: registra transação e marca invoice como Paid
+  ├─ REJEITADA/EXPIRADA: mantém Unpaid e adiciona nota (append)
+  └─ CANCELADA: mantém Unpaid, adiciona nota (append) e marca autorização como cancelada
+```
+
+Regras mandatórias:
+- Consentimento é imutável: não migrar `idRec` entre due_day/periodicidade.
+- Se due_day mudar e não houver autorização para o novo ciclo, usar Jornada 4 para novo consentimento.
+- Com `politicaRetentativa = NAO_PERMITE`, não implementar retry técnico de cobrança automática.
+
 ---
 
 ## Hooks WHMCS Registrados
@@ -181,6 +216,13 @@ Pix pago → webhook.php OU polling do frontend → ConfirmPaymentService::run()
 | `AdminInvoicesControlsOutput` | `includes/hooks/lknbbpix.php` | Injeta botão de confirmação manual no admin |
 | `AdminAreaHeaderOutput` | `includes/hooks/lknbbpix.php` | Injeta UI de desconto por produto na tela de config |
 | `InvoiceCancelled` | `includes/hooks/lknbbpix.php` | Antes de cancelar, verifica se o Pix foi pago e confirma automaticamente |
+
+Hooks adicionais para Pix Automático (novo fluxo):
+
+| Hook WHMCS | Arquivo | Comportamento |
+|---|---|---|
+| `ClientAreaPageViewInvoice` (ou equivalente de render da fatura) | `includes/hooks/lknbbpix.php` | Decide entre cobrança automática (`/cobr`) ou oferta de Jornada 4 |
+| `InvoiceCreationPreEmail` | `includes/hooks/lknbbpix.php` | Agenda cobrança automática apenas quando houver autorização APROVADA para o ciclo |
 
 ---
 
@@ -201,6 +243,9 @@ O `DiscountService` calcula o valor final do Pix aplicando, em ordem de priorida
 
 - **ORM:** `WHMCS\Database\Capsule` (Eloquent/Laravel). Sempre prefira `Capsule` a queries SQL brutas.
 - **Tabela customizada:** `mod_lknbbpix_discount_per_product` (criada automaticamente em `lknbbpix_config()` se não existir).
+- **Tabela customizada (Pix Automático):** `mod_lknbbpix_auths` (autorizações por cliente e ciclo).
+- **Campos mínimos em `mod_lknbbpix_auths`:** `id`, `client_id`, `id_rec`, `due_day`, `periodicidade`, `status`, `created_at`, `updated_at`.
+- **Imutabilidade do vínculo:** `id_rec` representa um consentimento de ciclo específico; não migrar para outro `due_day`/`periodicidade`.
 - **Tabelas WHMCS usadas diretamente:**
   - `tblinvoices` — status e userid da fatura
   - `tblorders` — relação fatura → pedido
@@ -215,7 +260,7 @@ As configurações são lidas via `Config::setting('nome')`, que aplica os casts
 
 | Chave | Tipo | Descrição |
 |---|---|---|
-| `env` | `string` (`dev`/`prod`) | Ambiente da API BB |
+| `env` | `string` (`hml_no_mtls`/`hml_mtls`/`prod`) | Ambiente da API BB |
 | `developer_application_key` | `string` | Chave de app do portal BB Developers |
 | `client_id` / `client_secret` | `string` | Credenciais OAuth2 |
 | `auth_basic` | `string` | Basic auth base64 para OAuth2 |
@@ -232,7 +277,8 @@ As configurações são lidas via `Config::setting('nome')`, que aplica os casts
 
 | Ambiente | Base URL Pix API | OAuth URL |
 |---|---|---|
-| `dev` (sandbox) | `https://api.hm.bb.com.br/pix/v2` | `https://oauth.hm.bb.com.br` |
+| `hml_no_mtls` (homologação sem mTLS) | `https://api.extranet.hm.bb.com.br/pix/v2` | `https://oauth.hm.bb.com.br` |
+| `hml_mtls` (homologação com mTLS) | `https://api-pix.hm.bb.com.br/pix/v2` | `https://oauth.hm.bb.com.br` |
 | `prod` (produção) | `https://api-pix.bb.com.br/pix/v2` | `https://oauth.bb.com.br` |
 
 Todas as requisições adicionam `?gw-dev-app-key={developer_application_key}` na query string.
@@ -247,6 +293,9 @@ Todas as requisições adicionam `?gw-dev-app-key={developer_application_key}` n
 - Sempre validar entrada com `Validator::cpf()` / `Validator::cnpj()` antes de enviar à API.
 - Criar novos serviços em `App/Pix/Services/` com um método público `run()`.
 - Usar `Response::return()` para respostas internas e `Response::api()` para endpoints AJAX.
+- Para Pix Automático, gerar `txid` determinístico para `PUT /cobr/{txid}`.
+- Em `invoice.notes`, sempre fazer append (nunca remover histórico).
+- Em falha de cobrança automática (`REJEITADA`/`EXPIRADA`), manter `Unpaid` e deixar automação do WHMCS continuar.
 - Atualizar `CHANGELOG.md` e a versão em `constants.php` a cada release.
 - Seguir o checklist do Pull Request Template em `.github/pull_request_template.md`.
 
@@ -258,6 +307,8 @@ Todas as requisições adicionam `?gw-dev-app-key={developer_application_key}` n
 - **Não** incluir chaves privadas, credenciais ou tokens no código-fonte.
 - **Não** remover ou modificar a verificação de duplicata em `ConfirmPaymentService` (prevenção de pagamento duplo).
 - **Não** usar `die()` ou `exit()` fora de `webhook.php` e verificações de segurança de arquivo.
+- **Não** implementar retry técnico de cobrança automática quando `politicaRetentativa = NAO_PERMITE`.
+- **Não** migrar `idRec` para outro `due_day`/`periodicidade`.
 
 ---
 
@@ -269,6 +320,17 @@ Todas as requisições adicionam `?gw-dev-app-key={developer_application_key}` n
 4. **Novo hook WHMCS:** Registre com `add_hook()` em `includes/hooks/lknbbpix.php`.
 5. **Novo template:** Crie o arquivo `.tpl` em `src/resources/` e renderize com `View::render('nome_template', $vars)`.
 6. **Novo erro de domínio:** Adicione o case no enum `PixExceptionCodes` e seu `label()` em português.
+
+## Pontos Críticos (Pix Automático)
+
+1. **Idempotência via BB:** use `txid` determinístico no `PUT /cobr/{txid}`; não criar idempotência paralela arbitrária.
+2. **Consentimento imutável:** não migrar autorização existente para novo ciclo. Mudou ciclo, novo consentimento.
+3. **Webhooks separados:** `webhook.php` (Pix imediato), `webhookrec.php` (status de autorização), `webhookcobr.php` (liquidação/falha).
+4. **Status e ações no WHMCS:**
+  - `CONCLUIDA` → marca `Paid` e registra transação.
+  - `REJEITADA`/`EXPIRADA` → mantém `Unpaid` e adiciona nota de falha (append).
+  - `CANCELADA` → mantém `Unpaid`, adiciona nota (append) e inativa autorização para próximos ciclos.
+5. **Sem retry técnico:** com `NAO_PERMITE`, a retomada de cobrança é do fluxo nativo de inadimplência do WHMCS.
 
 ---
 

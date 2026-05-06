@@ -1,92 +1,238 @@
-# whmcs-bb-pix
+# WHMCS BB Pix
 
-## Requirements and Support
-- PHP: 8.1. Ext: GD, mbstring
-- WHMCS: 8.6+
+Modulo de gateway de pagamento Pix para WHMCS com integracao ao Banco do Brasil.
 
-## Installation Mode
-1. Download the module .zip file.
-2. It is recommended to delete the previous version of the module from your WHMCS.
-3. Unzip and upload the extracted content to the WHMCS installation root.
+Este README foi escrito para administradores de WHMCS, equipes de suporte e times tecnicos que precisam instalar, configurar, atualizar, validar e remover o modulo com seguranca.
 
-## Configuration
-For the minimum operation of the module, the following configurations must be filled:
+## Sumario
+1. [Visao geral](#visao-geral)
+2. [Recursos do modulo](#recursos-do-modulo)
+3. [Requisitos](#requisitos)
+4. [Estrutura de arquivos](#estrutura-de-arquivos)
+5. [Instalacao](#instalacao)
+6. [Configuracao inicial no WHMCS](#configuracao-inicial-no-whmcs)
+7. [Como usar no dia a dia](#como-usar-no-dia-a-dia)
+8. [Atualizacao do modulo](#atualizacao-do-modulo)
+9. [Remocao do modulo](#remocao-do-modulo)
+10. [Checklist de validacao pos-instalacao](#checklist-de-validacao-pos-instalacao)
+11. [Problemas comuns e solucoes](#problemas-comuns-e-solucoes)
+12. [Boas praticas de seguranca](#boas-praticas-de-seguranca)
+13. [Notas tecnicas](#notas-tecnicas)
+14. [Referencias oficiais BB](#referencias-oficiais-bb)
+
+## Visao geral
+O modulo permite receber pagamentos via Pix diretamente nas faturas do WHMCS, com:
+
+- geracao de QR Code e copia e cola;
+- confirmacao automatica de pagamento (webhook e/ou verificacao manual);
+- controle de descontos e regras;
+- suporte a fluxos de Pix imediato e recursos avancados de Pix via BB API v2.
+
+## Recursos do modulo
+- Geracao de cobranca Pix para faturas WHMCS.
+- Confirmacao automatica de pagamento.
+- Confirmacao manual de pagamento.
+- Reembolso manual (quando aplicavel ao fluxo configurado).
+- Compartilhamento do codigo Pix copia e cola.
+- Configuracao de desconto por produto.
+- Configuracao de desconto global para pagamento via Pix.
+- Regras de desconto por criterio.
+- Suporte a webhooks da API BB (v2) para eventos de autorizacao e cobranca.
+
+## Requisitos
+### Plataforma
+- WHMCS 8.6 ou superior.
+- PHP 8.1 ou superior (recomendado utilizar versao suportada mais recente do seu ambiente).
+
+### Extensoes PHP
+- GD
+- mbstring
+- cURL
+
+### Dependencias e infraestrutura
+- Credenciais validas no portal BB Developers.
+- Acesso HTTPS funcional no WHMCS (obrigatorio para webhooks em producao).
+- Permissao de leitura/escrita para upload dos arquivos do modulo.
+
+## Estrutura de arquivos
+Arquivos principais do modulo:
+
+- src/modules/gateways/lknbbpix.php
+- src/modules/gateways/lknbbpix/api.php
+- src/modules/gateways/lknbbpix/webhook.php
+- src/modules/gateways/lknbbpix/webhookrec.php
+- src/modules/gateways/lknbbpix/webhookcobr.php
+- src/includes/hooks/lknbbpix.php
+
+## Instalacao
+### 1. Backup (obrigatorio)
+Antes de instalar em ambiente produtivo:
+
+- faca backup dos arquivos do WHMCS;
+- faca backup do banco de dados;
+- valide se consegue restaurar rapidamente em caso de rollback.
+
+### 2. Upload do pacote
+1. Baixe o arquivo zip da versao do modulo.
+2. Extraia localmente.
+3. Envie o conteudo para a raiz do WHMCS, preservando a estrutura de pastas.
+
+Observacao:
+- nao envie a pasta raiz do zip inteira se isso criar um nivel extra incorreto de diretorio;
+- confirme que os arquivos ficaram exatamente nos caminhos esperados.
+
+### 3. Permissoes
+Garanta permissao de leitura dos arquivos PHP e permissao adequada para diretorios de certificado, quando aplicavel.
+
+### 4. Ativacao no WHMCS
+1. Acesse: Configuracao > Pagamentos > Gateways de pagamento.
+2. Ative o gateway Pix Banco do Brasil (lknbbpix).
+3. Salve as configuracoes.
+
+## Configuracao inicial no WHMCS
+Preencha no minimo os campos abaixo para operacao basica:
+
 - developer_application_key
 - client_id
 - client_secret
-- Basic Authorization
-- Receiver key
-- Trade name/legal name of the billing issuer
-- City of the billing issuer
-- Environment
+- auth_basic (Basic Authorization)
+- receiver_pix_key
+- nome/razao social do recebedor
+- cidade do recebedor
+- env (ambiente)
 
-This information is obtained from the [BB Developers Portal](https://app.developers.bb.com.br/core/gcs/statics/login/login.novo.bb?tipo=st_cpf&urlRetorno=https%3A%2F%2Fapp.developers.bb.com.br%2F%23%2Flogin#/st-cpf).
+Esses dados sao obtidos no portal BB Developers:
 
-Pay attention to filling in the credentials according to your environment: whether testing or production.
+https://app.developers.bb.com.br/core/gcs/statics/login/login.novo.bb?tipo=st_cpf&urlRetorno=https%3A%2F%2Fapp.developers.bb.com.br%2F%23%2Flogin#/st-cpf
 
-Other configurations are optional and allow the gateway to function with its default values:
-- Pix Description
-- Pix Expiration
-- Custom field ID for CNPJ
-- Custom field ID for CPF
-- Insert the client's name and CPF/CNPJ in the Pix
+### Campos opcionais (com valores padrao)
+- descricao do Pix
+- expiracao do Pix
+- id do campo customizado para CNPJ
+- id do campo customizado para CPF
+- envio de nome e documento do pagador na cobranca
 
-## Usage Mode
-- Access an invoice and select "Pix - Banco do Brasil".
-- The Pix QR Code will be immediately generated.
-- Make the payment within 1 minute, and the page will automatically update upon detecting the payment. If not, manually refresh the page with F5.
+### Ambientes
+Use credenciais e chaves correspondentes ao ambiente selecionado:
 
-## Features
-- Manual refund
-- Automatic payment confirmation
-- Manual payment confirmation
-- Pix code sharing
-- Discount definition by product
-- Discount definition for Pix payment
-- Rules for applying discounts
+- homologacao
+- producao
 
-## Developer Notes
+Nunca misture credencial de homologacao em ambiente de producao.
 
-### Discount Calculation
+## Como usar no dia a dia
+1. Abra a fatura no WHMCS.
+2. Selecione o gateway Pix Banco do Brasil.
+3. O QR Code sera gerado automaticamente.
+4. O cliente paga no app bancario.
+5. A fatura e atualizada conforme confirmacao automatica ou verificacao manual.
 
-https://whmcs.community/topic/294264-api-get-the-product-id-from-getorders-call/
+## Atualizacao do modulo
+### Fluxo recomendado (seguro)
+1. Ative modo manutencao (recomendado).
+2. Gere backup completo de arquivos e banco.
+3. Leia o CHANGELOG da nova versao.
+4. Substitua os arquivos do modulo pelos da nova versao.
+5. Revise permissao de arquivos e diretorios sensiveis.
+6. Reabra as configuracoes do gateway e salve novamente.
+7. Execute testes funcionais (ver checklist abaixo).
 
-The product discount applies to the total product value, which is product value + its fees = total value.
+### Boas praticas na atualizacao
+- atualize primeiro em homologacao e depois em producao;
+- nunca atualize direto em horario de pico;
+- mantenha plano de rollback pronto.
 
-### Logic of API txid and WHMCS transid
-The BB API requests the sending of a txid to identify the Pix.
-Thus, the txid is sent in this format: `0000xa09ad1679ebbaf88a92cd98fd4`.
+## Remocao do modulo
+### Remocao funcional (desativar uso)
+1. Desative o gateway no WHMCS.
+2. Altere o gateway padrao de cobranca das faturas futuras, se necessario.
 
-Note that the `0000` before the `x` represents the ID of an invoice in WHMCS.
-The characters after the `x` are randomly generated to reach the minimum size of 26 characters for the `txid`.
+### Remocao completa (arquivos)
+1. Confirme que nao ha pagamentos pendentes que dependam do modulo.
+2. Faça backup final.
+3. Remova os arquivos em:
+	- src/modules/gateways/lknbbpix.php
+	- src/modules/gateways/lknbbpix/
+	- src/includes/hooks/lknbbpix.php
 
-This logic is handled by the `PixTxId` class.
+### Remocao de dados
+O modulo pode ter criado tabelas proprias para configuracoes/regras. Avalie com cuidado antes de excluir dados historicos. Em producao, recomenda-se manter dados para auditoria.
 
-### Documentation
+## Checklist de validacao pos-instalacao
+- Gateway aparece e salva sem erro no admin.
+- Credenciais e ambiente corretos.
+- Geracao de QR Code funcionando.
+- Pagamento de teste confirma a fatura.
+- Logs do gateway sem erros criticos.
+- Webhooks respondendo em HTTPS e com retorno esperado.
+- Fluxo de confirmacao manual funcionando (fallback).
 
-#### API V1
-- Pix Documentation: https://apoio.developers.bb.com.br/referency/post/648382d5d7ffe20012f2c287
-- Pix API Endpoints: https://apoio.developers.bb.com.br/referency/post/6483836ddcefbe00128886ce
-- Postman Collection and testing Pix keys: https://apoio.developers.bb.com.br/referency/post/5ff4946ce2a4400012dad1d9
-- API Testing Instructions: https://apoio.developers.bb.com.br/referency/post/5ff4946ce2a4400012dad1d9
+## Problemas comuns e solucoes
+### 1) QR Code nao gera
+Possiveis causas:
+- credenciais invalidas;
+- ambiente incorreto (homologacao/producao);
+- falha de comunicacao cURL;
+- chave Pix recebedora invalida.
 
-In the testing environment, you can use one of the keys below:
-- testqrcode01@bb.com.br
-- 28779295827
-- 7f6844d0-de89-47e5-9ef7-e0a35a681615
-- 3d94a38b-f344-460e-b6c9-489469b2fb03
-- d14d32de-b3b9-4c31-9f89-8df2cec92c50
-- Pix payment simulation in testing: https://apoio.developers.bb.com.br/referency/post/61bcdd19b6164800123d7654
+Acoes:
+- validar credenciais no BB Developers;
+- revisar logs do modulo/WHMCS;
+- testar conectividade do servidor com endpoints do BB.
 
-#### API V2
-- API Testing Instructions: https://apoio.developers.bb.com.br/referency/post/5ff4946ce2a4400012dad1d9
+### 2) Fatura nao confirma automaticamente
+Possiveis causas:
+- webhook nao registrado;
+- URL de webhook sem HTTPS;
+- bloqueio de firewall/rede;
+- payload nao chegando ao endpoint correto.
 
-- Webhook https://apoio.developers.bb.com.br/referency/post/64f878e5a7287f001313fc6e
+Acoes:
+- validar URLs dos webhooks configurados;
+- checar acesso externo aos endpoints;
+- analisar logs de entrada e resposta do webhook.
 
-#### Questions regarding API rules
+### 3) Erro de autenticacao na API BB
+Possiveis causas:
+- client_id/client_secret incorretos;
+- auth_basic incorreto;
+- certificado/chave incompativeis com ambiente.
 
-Consult the [BB forum for developers](https://forum.developers.bb.com.br/)
+Acoes:
+- regenerar credenciais;
+- revisar formacao do Basic Authorization;
+- validar certificados em homologacao antes de producao.
 
-- Special characters in the "solicitacaoPagador" field: [BB Forum](https://forum.developers.bb.com.br/t/caracteres-suportados-para-o-campo-solicitacaopagador-na-criacao-do-pix/10182/6)
+## Boas praticas de seguranca
+- Nunca versionar credenciais, tokens ou chaves privadas.
+- Restrinja acesso aos arquivos de certificado.
+- Use sempre HTTPS no WHMCS e nos webhooks.
+- Monitore logs periodicamente para detectar falhas e tentativas indevidas.
+- Defina rotina de rotacao de credenciais.
 
-- QR Code images generated by BB's testing API cannot be tested by apps like Nubank and others. [See more on the BB Developers Forum](https://forum.developers.bb.com.br/t/como-ler-qr-codes-gerados-com-a-api-de-homologacao/5688).
+## Notas tecnicas
+### Logica de txid e identificacao da fatura
+Historicamente, a identificacao utilizava padrao legado com invoice antes de x, por exemplo:
+
+- 0000xa09ad1679ebbaf88a92cd98fd4
+
+No fluxo atual do modulo, ha suporte aos formatos necessarios para correlacao com a fatura no WHMCS, inclusive para cenarios de compatibilidade.
+
+### Descontos
+Quando habilitado, o desconto por produto considera o valor total relacionado ao item (produto + encargos associados), conforme regra de negocio do modulo.
+
+## Referencias oficiais BB
+### API Pix v1
+- Documentacao Pix: https://apoio.developers.bb.com.br/referency/post/648382d5d7ffe20012f2c287
+- Endpoints Pix API: https://apoio.developers.bb.com.br/referency/post/6483836ddcefbe00128886ce
+- Colecao Postman e chaves de teste: https://apoio.developers.bb.com.br/referency/post/5ff4946ce2a4400012dad1d9
+- Simulacao de pagamento em homologacao: https://apoio.developers.bb.com.br/referency/post/61bcdd19b6164800123d7654
+
+### API Pix v2
+- Instrucoes de testes: https://apoio.developers.bb.com.br/referency/post/5ff4946ce2a4400012dad1d9
+- Webhooks: https://apoio.developers.bb.com.br/referency/post/64f878e5a7287f001313fc6e
+
+### Forum BB Developers
+- Portal do forum: https://forum.developers.bb.com.br/
+- Caracteres no campo solicitacaoPagador: https://forum.developers.bb.com.br/t/caracteres-suportados-para-o-campo-solicitacaopagador-na-criacao-do-pix/10182/6
+- Leitura de QR Code em homologacao: https://forum.developers.bb.com.br/t/como-ler-qr-codes-gerados-com-a-api-de-homologacao/5688

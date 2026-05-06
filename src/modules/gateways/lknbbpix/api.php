@@ -9,12 +9,20 @@
 
 use Lkn\BBPix\App\Pix\Controllers\ApiController;
 use Lkn\BBPix\App\Pix\Controllers\DiscountController;
+use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\PixController;
+use Lkn\BBPix\App\Pix\Services\DecisionService;
+use Lkn\BBPix\App\Pix\Services\LoadJourney4PixService;
+use Lkn\BBPix\App\Pix\Services\PixTxidService;
 use Lkn\BBPix\Helpers\Auth;
 use Lkn\BBPix\Helpers\Config;
+use Lkn\BBPix\Helpers\InvoiceOriginHelper;
+use Lkn\BBPix\Helpers\Logger;
 use Lkn\BBPix\Helpers\Response;
 use WHMCS\Authentication\CurrentUser;
 use WHMCS\Database\Capsule;
+use chillerlan\QRCode\QRCode;
+use chillerlan\QRCode\QROptions;
 
 require_once __DIR__ . '/../../../init.php';
 require_once __DIR__ . '/vendor/autoload.php';
@@ -74,6 +82,116 @@ switch ($request->action) {
 
         http_response_code(200);
         (new DiscountController())->delete($request->productId);
+
+        break;
+
+    case 'remove-webhooks':
+        if (!Auth::isAdminLogged(['Configure Payment Gateways'])) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado.']);
+        }
+
+        try {
+            $repo = new PixAutoRepository();
+            $recResult  = $repo->removerWebhookRec();
+            $cobrResult = $repo->removerWebhookCobr();
+
+            http_response_code(200);
+            Response::api(true, ['rec' => $recResult, 'cobr' => $cobrResult]);
+        } catch (Throwable $e) {
+            http_response_code(500);
+            Response::api(false, ['error' => $e->getMessage()]);
+        }
+
+        break;
+
+    case 'load-journey4-qrcode':
+        if (!($authState->admin() || $authState->client())) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado.']);
+        }
+
+        if (!isset($request->token) || $request->token !== ($_SESSION['lkn-bb-pix'] ?? '')) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Token inválido.']);
+        }
+
+        $invoiceId = (int) ($request->invoiceId ?? 0);
+
+        if ($invoiceId <= 0) {
+            http_response_code(422);
+            Response::api(false, ['error' => 'invoiceId inválido.']);
+        }
+
+        $invoice = Capsule::table('tblinvoices')
+            ->where('id', $invoiceId)
+            ->first(['id', 'userid', 'paymentmethod', 'duedate']);
+
+        if (empty($invoice) || $invoice->paymentmethod !== 'lknbbpix') {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Fatura inválida para este gateway.']);
+        }
+
+        $sessionClientId = (int) ($_SESSION['uid'] ?? 0);
+
+        if (!$authState->admin() && $sessionClientId > 0 && $sessionClientId !== (int) $invoice->userid) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado à fatura.']);
+        }
+
+        try {
+            $clientId = (int) $invoice->userid;
+            $dueDay = (int) date('d', strtotime((string) $invoice->duedate));
+            $invoiceOrigin = (new InvoiceOriginHelper())->classify($invoiceId);
+
+            $decision = $invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL
+                ? DecisionService::MANUAL_TRADICIONAL
+                : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay);
+
+            if ($decision !== DecisionService::JORNADA4) {
+                http_response_code(409);
+                Response::api(false, ['error' => 'A fatura não está no fluxo Jornada 4.', 'decision' => $decision]);
+            }
+
+            $txid = PixTxidService::generateForInvoice($invoiceId);
+            $journeyResponse = (new LoadJourney4PixService())->run($invoiceId, $clientId, $dueDay, $txid);
+
+            if (!($journeyResponse['success'] ?? false)) {
+                http_response_code(500);
+                Response::api(false, ['error' => 'Falha ao carregar proposta do Pix Automático.']);
+            }
+
+            $emv = (string) ($journeyResponse['data']['emv'] ?? '');
+
+            if ($emv === '') {
+                http_response_code(500);
+                Response::api(false, ['error' => 'EMV não retornado pela jornada 4.']);
+            }
+
+            $qrOptions = new QROptions();
+            $qrOptions->eccLevel = QRCode::ECC_M;
+            $qrOptions->outputType = QRCode::OUTPUT_IMAGE_PNG;
+            $qrOptions->pngCompression = 0;
+
+            $qrCodeBase64 = (new QRCode($qrOptions))->render($emv);
+
+            http_response_code(200);
+            Response::api(true, [
+                'qrCodeText' => $emv,
+                'qrCodeBase64' => $qrCodeBase64,
+                'idRec' => $journeyResponse['data']['idRec'] ?? null,
+                'cached' => $journeyResponse['data']['cached'] ?? false,
+            ]);
+        } catch (Throwable $e) {
+            Logger::log(
+                'Erro ao carregar Jornada 4 via API',
+                ['invoiceId' => $invoiceId],
+                ['error' => $e->getMessage()]
+            );
+
+            http_response_code(500);
+            Response::api(false, ['error' => 'Erro interno ao gerar proposta do Pix Automático.']);
+        }
 
         break;
 

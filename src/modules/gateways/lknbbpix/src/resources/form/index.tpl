@@ -1,8 +1,108 @@
-{if isset($errorMsg)}
+{if $pixFlow === 'COBR_AUTOMATICO'}
+    <div class="lkn-pix-bb-feedback alert alert-info" role="alert">
+        {$autoPixMessage|default:'Esta fatura será cobrada automaticamente no vencimento via Pix Automático.'}
+    </div>
+
+{elseif isset($errorMsg)}
     <div
         class="lkn-pix-bb-feedback alert alert-info"
         role="alert"
     >{$errorMsg}</div>
+
+{elseif $pixFlow === 'JORNADA4'}
+    {include "../notification/index.tpl"}
+
+    <div class="container" id="lknbbpix-auto-flow">
+        <div class="row">
+            <div class="col-12" style="margin-top: 15px; margin-bottom: 15px;">
+                <div id="lknbbpix-auto-loader" class="alert alert-info" role="alert">
+                    Carregando proposta do Pix Automático...
+                </div>
+                <div id="lknbbpix-auto-error" class="alert alert-danger" role="alert" style="display: none;"></div>
+            </div>
+
+            <div class="col-12" id="lknbbpix-auto-qr-wrapper" style="display: none;">
+                <img
+                    id="lknbbpix-auto-qr-image"
+                    src=""
+                    alt="QR Code Pix Automático"
+                    width="100%"
+                    style="background-color: white;"
+                />
+            </div>
+
+            <div class="col-12" style="margin-top: 12px;">
+                <textarea
+                    id="qr-code-text"
+                    style="
+                    display: none;
+                    margin: 0px;
+                    font-size: 0.75em;
+                    color: #bebebe;
+                    background-color: #eee;
+                    border: none;
+                    width: 100%;
+                    border-radius: 3px;
+                    height: 80px;
+                    overflow: hidden;
+                    resize: none;
+                    "
+                    disabled
+                ></textarea>
+            </div>
+
+            <div class="col-12" style="max-width: 320px; margin: 0 auto 0;">
+                <a
+                    id="btn-copy-qr-code-text"
+                    class="btn btn-xs btn-link btn-block"
+                    style="color: #7777779c; margin: 0 auto 0; display: none;"
+                    type="button"
+                    role="button"
+                    tabindex="0"
+                >
+                    <i class="fas fa-hand-pointer"></i>
+                    Clique aqui para copiar o código do Pix
+                </a>
+
+                <button
+                    id="lknbbpix-retry-journey4-btn"
+                    class="btn btn-warning btn-sm btn-block"
+                    type="button"
+                    style="display: none; margin-top: 10px;"
+                >
+                    Tentar novamente
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <input
+        type="hidden"
+        id="lkn-bb-pix-token"
+        value="{$csrfToken}"
+    >
+
+    <input type="hidden" id="lkn-bb-pix-flow-mode" value="JORNADA4">
+    <input type="hidden" id="lknbbpix-invoice-id" value="{$invoiceId}">
+
+    <script type="text/javascript">
+        localStorage.setItem('pixPaymentMaxChecks', {$max_client_manual_checks|default:5})
+    </script>
+    <input
+        class="lknBbPixInstallUrl"
+        type="hidden"
+        value="{$whmcsInstallUrl}"
+    >
+    <script
+        src="{$whmcsInstallUrl}/modules/gateways/lknbbpix/src/resources/js/utils.js"
+        defer
+    ></script>
+
+    <script
+        src="{$whmcsInstallUrl}/modules/gateways/lknbbpix/src/resources/form/index.js"
+        defer
+    ></script>
+
 {else}
     {include "../notification/index.tpl"}
 
@@ -154,6 +254,8 @@
         id="lkn-bb-pix-token"
         value="{$csrfToken}"
     >
+
+    <input type="hidden" id="lkn-bb-pix-flow-mode" value="MANUAL_TRADICIONAL">
 
     <script type="text/javascript">
         localStorage.setItem('pixPaymentMaxChecks', {$max_client_manual_checks})

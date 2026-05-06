@@ -2,9 +2,11 @@
 
 use Lkn\BBPix\App\Pix\Exceptions\PixException;
 use Lkn\BBPix\App\Pix\PixController;
+use Lkn\BBPix\App\Pix\Services\DecisionService;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Formatter;
 use Lkn\BBPix\Helpers\Invoice;
+use Lkn\BBPix\Helpers\InvoiceOriginHelper;
 use Lkn\BBPix\Helpers\Logger;
 use Lkn\BBPix\Helpers\Validator;
 use Lkn\BBPix\Helpers\View;
@@ -56,21 +58,41 @@ function lknbbpix_config()
                 }
             );
         }
+
+        if (!Capsule::schema()->hasTable('mod_lknbbpix_auths')) {
+            Capsule::schema()->create(
+                'mod_lknbbpix_auths',
+                function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->increments('id');
+                    $table->unsignedInteger('client_id');
+                    $table->string('id_rec', 29)->unique();
+                    $table->unsignedTinyInteger('due_day');
+                    $table->string('periodicidade', 25);
+                    $table->string('status', 25);
+                    $table->text('emv_payload')->nullable();
+                    $table->dateTime('created_at')->useCurrent();
+                    $table->dateTime('updated_at')->useCurrent();
+                    $table->index(['client_id', 'due_day', 'status'], 'mod_lknbbpix_auths_lookup_idx');
+                }
+            );
+        }
     } catch (Exception $e) {
-        echo "Unable to create mod_lknbbpix_discount_per_product: {$e->getMessage()}";
+        echo "Unable to create gateway tables: {$e->getMessage()}";
     }
 
     $whmcsInstallUrl = rtrim(Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value'), '/');
+
+    $apiUrl = "$whmcsInstallUrl/modules/gateways/lknbbpix/api.php";
 
     $header = View::render(
         'config_header',
         [
             'logoUrl' => $whmcsInstallUrl . '/modules/gateways/lknbbpix/logo.png',
-            'moduleVersion' => Config::constant('version')
+            'moduleVersion' => Config::constant('version'),
+            'apiUrl' => $apiUrl,
         ]
     );
-
-    $apiUrl = "$whmcsInstallUrl/modules/gateways/lknbbpix/api.php";
 
     return [
         'FriendlyName' => [
@@ -112,8 +134,9 @@ HTML
             'Size' => '25',
             'Description' => 'Define se o gateway irá operar em modo de produção ou testes. Lembre-se de atualizar as credenciais acima para as do ambiente em questão.',
             'Options' => [
-                'prod' => 'Produção',
-                'dev' => 'Homologação'
+                'hml_no_mtls' => 'Homologação Sem mTLS',
+                'hml_mtls' => 'Homologação Com mTLS',
+                'prod' => 'Produção Com mTLS'
             ]
         ],
 
@@ -510,6 +533,38 @@ function lknbbpix_link($params): string
 
         $clientId = $params['clientdetails']['client_id'];
 
+        $invoiceFlowData = lknbbpix_resolve_invoice_flow($invoiceId, (int) $clientId);
+        $flowDecision = $invoiceFlowData['decision'];
+
+        $whmcsInstallUrl = rtrim(Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value'), '/');
+
+        if ($flowDecision === DecisionService::COBR_AUTOMATICO) {
+            return View::render(
+                'form.index',
+                [
+                    'pixFlow' => DecisionService::COBR_AUTOMATICO,
+                    'autoPixMessage' => 'Esta fatura possui autorização ativa para Pix Automático. A cobrança será processada automaticamente no vencimento.',
+                ]
+            );
+        }
+
+        if ($flowDecision === DecisionService::JORNADA4) {
+            $csrfToken = bin2hex(random_bytes(32));
+            $_SESSION['lkn-bb-pix'] = $csrfToken;
+
+            return View::render(
+                'form.index',
+                [
+                    'pixFlow' => DecisionService::JORNADA4,
+                    'csrfToken' => $csrfToken,
+                    'invoiceId' => (int) $invoiceId,
+                    'invoiceValue' => (float) $paymentValue,
+                    'max_client_manual_checks' => $params['max_client_manual_checks'] ?? 5,
+                    'whmcsInstallUrl' => $whmcsInstallUrl,
+                ]
+            );
+        }
+
         if ($payerDocType === 'cnpj') {
             $clientFullName = $params['clientdetails']['companyname'];
         } else {
@@ -554,11 +609,10 @@ function lknbbpix_link($params): string
             $taxAmount = number_format($taxAmount, '2', ',', '.');
         }
 
-        $whmcsInstallUrl = rtrim(Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value'), '/');
-
         return View::render(
             'form.index',
             [
+                'pixFlow' => DecisionService::MANUAL_TRADICIONAL,
                 'qrCodeBase64' => $response['data']['pixQrCodeBase64'],
                 'qrCodeText' => $response['data']['pixCode'],
                 'pixValue' => $pixValue,
@@ -602,6 +656,26 @@ function lknbbpix_link($params): string
             ['errorMsg' => 'Não foi possível gerar o Pix.']
         );
     }
+}
+
+function lknbbpix_resolve_invoice_flow(int $invoiceId, int $clientId): array
+{
+    $invoice = Capsule::table('tblinvoices')
+        ->where('id', $invoiceId)
+        ->first(['duedate']);
+
+    $dueDay = (int) date('d', strtotime((string) ($invoice->duedate ?? date('Y-m-d'))));
+    $origin = (new InvoiceOriginHelper())->classify($invoiceId);
+
+    $decision = $origin === InvoiceOriginHelper::MANUAL_TRADICIONAL
+        ? DecisionService::MANUAL_TRADICIONAL
+        : (new DecisionService())->evaluate($origin, $clientId, $dueDay);
+
+    return [
+        'decision' => $decision,
+        'origin' => $origin,
+        'dueDay' => $dueDay,
+    ];
 }
 
 /**

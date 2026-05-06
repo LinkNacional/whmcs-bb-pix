@@ -8,8 +8,13 @@ return [
     'public_key_path' => realpath(__DIR__ . '/../certs/public.key'),
     'private_key_path' => realpath(__DIR__ . '/../certs/private.key'),
 
-    'dev' => [
-        'baseUrl' => 'https://api.hm.bb.com.br/pix/v2',
+    'hml_no_mtls' => [
+        'baseUrl' => 'https://api.extranet.hm.bb.com.br/pix/v2',
+        'oAuthUrl' => 'https://oauth.hm.bb.com.br'
+    ],
+
+    'hml_mtls' => [
+        'baseUrl' => 'https://api-pix.hm.bb.com.br/pix/v2',
         'oAuthUrl' => 'https://oauth.hm.bb.com.br'
     ],
 
