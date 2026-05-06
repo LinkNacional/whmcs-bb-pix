@@ -13,23 +13,36 @@ env:
 jobs:
   encode-build:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-      # Add plugin files to a root directory
-      - name: Generate .zip for upload to repository
-        working-directory: ${{env.WORK_DIR}}
-        run: "mkdir $PLUGIN_NAME && mv -t ./$PLUGIN_NAME ./modules ./includes ./INSTALL.txt && ls -lah"
+      # Extrai a versão do constants.php do módulo automaticamente
+      - name: Read module version
+        id: module_version
+        run: |
+          VERSION=$(php -r "echo (require 'src/modules/gateways/lknbbpix/src/constants.php')['version'];")
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # To avoid encoding /vendor, Composer steps must run after encoding
+      # Move apenas os diretórios e arquivo necessários (mv seletivo — sem arquivos de dev)
+      - name: Prepare release directory
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          mkdir "$PLUGIN_NAME"
+          mv modules includes INSTALL.txt "$PLUGIN_NAME/"
+
+      # Cache do Composer para acelerar builds consecutivos
       - name: Cache Composer dependencies
         uses: actions/cache@v3
         with:
           path: /tmp/composer-cache
           key: ${{ runner.os }}-${{ hashFiles('**/composer.lock') }}
 
+      # Roda composer install após mover os arquivos (vendor não entra no mv acima)
       - name: Composer install
         uses: php-actions/composer@v6
         with:
@@ -54,7 +67,7 @@ jobs:
         uses: mathieudutour/github-tag-action@v6.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          custom_tag: "2.2.0" # // TODO caso necessário definir a tag da release manualmente
+          custom_tag: ${{ steps.module_version.outputs.version }}
 
       # Generate new release
       - name: Generate new Release
@@ -63,6 +76,6 @@ jobs:
           artifacts: ${{ env.WORK_DIR }}/${{ env.PLUGIN_NAME }}.zip
           token: ${{ secrets.GITHUB_TOKEN }}
           commit: "main"
-          draft: true
+          draft: false
           tag: ${{ steps.tag_version.outputs.new_tag }}
           name: Release ${{ steps.tag_version.outputs.new_tag }}
