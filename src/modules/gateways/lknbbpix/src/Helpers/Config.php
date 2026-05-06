@@ -2,7 +2,11 @@
 
 namespace Lkn\BBPix\Helpers;
 
-require_once __DIR__ . '/../../../../../includes/gatewayfunctions.php';
+$gatewayFunctionsPath = __DIR__ . '/../../../../../includes/gatewayfunctions.php';
+
+if (file_exists($gatewayFunctionsPath)) {
+    require_once $gatewayFunctionsPath;
+}
 
 /**
  * Provides fast access to the module settings and constants.
@@ -55,7 +59,9 @@ final class Config
             'pix_expiration' => empty($value) ? 1 : ((int) ($value)),
             'cnpj_cf_id' => (int) ($value),
             'cpf_cf_id' => (int) ($value),
+            'cpf_cnpj_cf_id' => (int) ($value),
             'send_payer_doc_and_name' => (bool) ($value),
+            'enable_pix_automatic' => $value === 'on',
             'enable_pix_when_invoice_cancel' => is_null($value) ? true : ((bool) $value),
             'discount_for_pix_payment_percentage' => ((float) $value) / 100,
             'ruled_discount_percentage' => ((float) $value) / 100,

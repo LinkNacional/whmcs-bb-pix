@@ -8,6 +8,7 @@ use Lkn\BBPix\Helpers\Formatter;
 use Lkn\BBPix\Helpers\Invoice;
 use Lkn\BBPix\Helpers\InvoiceOriginHelper;
 use Lkn\BBPix\Helpers\Logger;
+use Lkn\BBPix\Helpers\PayerResolver;
 use Lkn\BBPix\Helpers\Validator;
 use Lkn\BBPix\Helpers\View;
 use WHMCS\Database\Capsule;
@@ -226,6 +227,13 @@ HTML
             'Type' => 'yesno',
             'Default' => 'yes',
             'Description' => 'Assim, esses dados serão vistos no aplicativo de pagamento. Caso CNPJ e CPF estejam presentes no perfil do cliente, o CNPJ será utilizado. Obrigatório para cobranças com multa e/ou juros.'
+        ],
+
+        'enable_pix_automatic' => [
+            'FriendlyName' => 'Habilitar Pix Automático',
+            'Type' => 'yesno',
+            'Default' => 'on',
+            'Description' => 'Desative para forçar apenas o fluxo manual/tradicional de Pix.'
         ],
 
         'cnpj_cf_id' => [
@@ -493,44 +501,6 @@ function lknbbpix_link($params): string
             );
         }
 
-        $clientCustomFields = $params['clientdetails']['customfields'];
-        $payerDocType = '';
-        $payerDocValue = '';
-
-        if ((bool) ($params['send_payer_doc_and_name'])) {
-            if (!empty($params['cpf_cnpj_cf_id'])) {
-                $clientCpfOrCnpj = current(array_filter($clientCustomFields, fn ($cf) => (int) ($cf['id']) === (int) ($params['cpf_cnpj_cf_id'])));
-                $clientCpfOrCnpj = $clientCpfOrCnpj['value'];
-
-                if (Validator::cpf($clientCpfOrCnpj)) {
-                    $payerDocType = 'cpf';
-                    $payerDocValue = $clientCpfOrCnpj;
-                } elseif (Validator::cnpj($clientCpfOrCnpj)) {
-                    $payerDocType = 'cnpj';
-                    $payerDocValue = $clientCpfOrCnpj;
-                } else {
-                    return View::render(
-                        'form.index',
-                        ['errorMsg' => 'Verifique seu CPF/CNPJ e tente novamente.']
-                    );
-                }
-            } else {
-                $clientCnpj = current(array_filter($clientCustomFields, fn ($cf) => (int) ($cf['id']) === (int) ($params['cnpj_cf_id'])));
-                $clientCnpj = trim($clientCnpj['value']);
-
-                if (empty($clientCnpj)) {
-                    $clientCpf = current(array_filter($clientCustomFields, fn ($cf) => (int) ($cf['id']) === (int) ($params['cpf_cf_id'])));
-                    $clientCpf = trim($clientCpf['value']);
-
-                    $payerDocType = 'cpf';
-                    $payerDocValue = $clientCpf;
-                } else {
-                    $payerDocType = 'cnpj';
-                    $payerDocValue = $clientCnpj;
-                }
-            }
-        }
-
         $clientId = $params['clientdetails']['client_id'];
 
         $invoiceFlowData = lknbbpix_resolve_invoice_flow($invoiceId, (int) $clientId);
@@ -547,6 +517,25 @@ function lknbbpix_link($params): string
                 ]
             );
         }
+
+        $payerResolution = PayerResolver::resolveFromGatewayParams(
+            $params,
+            $flowDecision === DecisionService::JORNADA4 || (bool) ($params['send_payer_doc_and_name'])
+        );
+
+        if (!($payerResolution['success'] ?? false)) {
+            return View::render(
+                'form.index',
+                [
+                    'errorMsg' => $payerResolution['data']['error'] ?? PayerResolver::PROFILE_UPDATE_REQUIRED_MESSAGE,
+                    'errorProfileUrl' => $payerResolution['data']['profileUrl'] ?? PayerResolver::PROFILE_DETAILS_URL,
+                ]
+            );
+        }
+
+        $clientFullName = $payerResolution['data']['clientFullName'];
+        $payerDocType = $payerResolution['data']['payerDocType'];
+        $payerDocValue = $payerResolution['data']['payerDocValue'];
 
         if ($flowDecision === DecisionService::JORNADA4) {
             $csrfToken = bin2hex(random_bytes(32));
@@ -565,21 +554,12 @@ function lknbbpix_link($params): string
             );
         }
 
-        if ($payerDocType === 'cnpj') {
-            $clientFullName = $params['clientdetails']['companyname'];
-        } else {
-            $firstName = $params['clientdetails']['firstname'];
-            $lastName = $params['clientdetails']['lastname'];
-
-            $clientFullName = substr(trim("$firstName $lastName"), 0, 200);
-        }
-
         $cobType = Config::setting('enable_fees_interest') ? 'cobv' : 'cob';
 
         $response = (new PixController($cobType))->create([
-            'clientFullName' => Formatter::name($clientFullName),
+            'clientFullName' => $clientFullName,
             'payerDocType' => $payerDocType,
-            'payerDocValue' => Formatter::removeNonNumber($payerDocValue),
+            'payerDocValue' => $payerDocValue,
             'invoiceId' => $invoiceId,
             'paymentValue' => $paymentValue,
             'clientId' => $clientId

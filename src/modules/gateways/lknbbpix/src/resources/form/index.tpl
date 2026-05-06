@@ -7,7 +7,14 @@
     <div
         class="lkn-pix-bb-feedback alert alert-info"
         role="alert"
-    >{$errorMsg}</div>
+    >
+        <div>{$errorMsg}</div>
+        {if isset($errorProfileUrl) && $errorProfileUrl}
+            <div style="margin-top: 10px;">
+                <a href="{$errorProfileUrl}" class="btn btn-warning btn-sm">Atualizar dados do perfil</a>
+            </div>
+        {/if}
+    </div>
 
 {elseif $pixFlow === 'JORNADA4'}
     {include "../notification/index.tpl"}

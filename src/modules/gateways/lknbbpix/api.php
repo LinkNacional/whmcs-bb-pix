@@ -18,6 +18,7 @@ use Lkn\BBPix\Helpers\Auth;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\InvoiceOriginHelper;
 use Lkn\BBPix\Helpers\Logger;
+use Lkn\BBPix\Helpers\PayerResolver;
 use Lkn\BBPix\Helpers\Response;
 use WHMCS\Authentication\CurrentUser;
 use WHMCS\Database\Capsule;
@@ -142,6 +143,12 @@ switch ($request->action) {
         try {
             $clientId = (int) $invoice->userid;
             $dueDay = (int) date('d', strtotime((string) $invoice->duedate));
+
+            if (!Config::setting('enable_pix_automatic')) {
+                http_response_code(409);
+                Response::api(false, ['error' => 'Pix Automático está desabilitado nas configurações do gateway.']);
+            }
+
             $invoiceOrigin = (new InvoiceOriginHelper())->classify($invoiceId);
 
             $decision = $invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL
@@ -154,7 +161,20 @@ switch ($request->action) {
             }
 
             $txid = PixTxidService::generateForInvoice($invoiceId);
-            $journeyResponse = (new LoadJourney4PixService())->run($invoiceId, $clientId, $dueDay, $txid);
+            $payerResolution = PayerResolver::resolveForClientId($clientId, true);
+
+            if (!($payerResolution['success'] ?? false)) {
+                http_response_code(422);
+                Response::api(false, $payerResolution['data'] ?? PayerResolver::profileUpdateRequired()['data']);
+            }
+
+            $journeyResponse = (new LoadJourney4PixService())->run(
+                $invoiceId,
+                $clientId,
+                $dueDay,
+                $txid,
+                $payerResolution['data']
+            );
 
             if (!($journeyResponse['success'] ?? false)) {
                 http_response_code(500);

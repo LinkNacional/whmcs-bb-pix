@@ -9,6 +9,12 @@ use PHPUnit\Framework\TestCase;
 
 final class LoadJourney4PixServiceTest extends TestCase
 {
+    private const PAYER_DATA = [
+        'clientFullName' => 'Empresa Teste LTDA',
+        'payerDocType' => 'cnpj',
+        'payerDocValue' => '12345678000199',
+    ];
+
     public function testRunReturnsCachedEmvWhenCreatedAuthorizationAlreadyHasPayload(): void
     {
         $pixRepo = $this->createMock(PixAutoRepository::class);
@@ -31,7 +37,7 @@ final class LoadJourney4PixServiceTest extends TestCase
 
         $service = new LoadJourney4PixService($pixRepo, $authRepo);
 
-        $response = $service->run(999, 100, 15, 'LKN0000000999ABCDE1234567');
+        $response = $service->run(999, 100, 15, 'LKN0000000999ABCDE1234567', self::PAYER_DATA);
 
         self::assertTrue($response['success']);
         self::assertSame('REC_001', $response['data']['idRec']);
@@ -72,7 +78,7 @@ final class LoadJourney4PixServiceTest extends TestCase
 
         $service = new LoadJourney4PixService($pixRepo, $authRepo);
 
-        $response = $service->run(1000, 101, 20, 'LKN0000001000ABCDE1234567');
+        $response = $service->run(1000, 101, 20, 'LKN0000001000ABCDE1234567', self::PAYER_DATA);
 
         self::assertTrue($response['success']);
         self::assertSame('REC_002', $response['data']['idRec']);
@@ -95,7 +101,11 @@ final class LoadJourney4PixServiceTest extends TestCase
 
         $pixRepo->expects(self::once())
             ->method('criarCobV')
-            ->with('LKN0000002000ABCDE1234567', self::isType('array'))
+            ->with('LKN0000002000ABCDE1234567', self::callback(function (array $payload): bool {
+                return isset($payload['devedor']['nome'], $payload['devedor']['cnpj'])
+                    && $payload['devedor']['nome'] === self::PAYER_DATA['clientFullName']
+                    && $payload['devedor']['cnpj'] === self::PAYER_DATA['payerDocValue'];
+            }))
             ->willReturn(['success' => true, 'data' => ['ok' => true]]);
 
         $pixRepo->expects(self::once())
@@ -121,7 +131,7 @@ final class LoadJourney4PixServiceTest extends TestCase
 
         $service = new LoadJourney4PixService($pixRepo, $authRepo);
 
-        $response = $service->run(2000, 102, 5, 'LKN0000002000ABCDE1234567');
+        $response = $service->run(2000, 102, 5, 'LKN0000002000ABCDE1234567', self::PAYER_DATA);
 
         self::assertTrue($response['success']);
         self::assertSame('REC_NEW_003', $response['data']['idRec']);

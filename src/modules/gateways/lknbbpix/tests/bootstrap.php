@@ -2,6 +2,15 @@
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+$GLOBALS['lknbbpix_gateway_variables'] = [
+    'enable_logs' => false,
+    'fine_days' => '1',
+    'pix_expiration' => '1',
+    'receiver_pix_key' => 'teste@pix.com',
+    'pix_descrip' => '',
+    'enable_pix_automatic' => 'on',
+];
+
 if (!function_exists('enum_exists')) {
     function enum_exists(string $enum, bool $autoload = true): bool
     {
@@ -12,13 +21,7 @@ if (!function_exists('enum_exists')) {
 if (!function_exists('getGatewayVariables')) {
     function getGatewayVariables(string $gateway): array
     {
-        return [
-            'enable_logs' => false,
-            'fine_days' => '1',
-            'pix_expiration' => '1',
-            'receiver_pix_key' => 'teste@pix.com',
-            'pix_descrip' => '',
-        ];
+        return $GLOBALS['lknbbpix_gateway_variables'];
     }
 }
 

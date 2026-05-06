@@ -20,7 +20,7 @@ final class LoadJourney4PixService
         $this->authRepository = $authRepository ?? new AuthRepository();
     }
 
-    public function run(int $invoiceId, int $clientId, int $dueDay, string $txid): array
+    public function run(int $invoiceId, int $clientId, int $dueDay, string $txid, array $payerData): array
     {
         $cached = $this->authRepository->findCreatedByClientAndDueDay($clientId, $dueDay);
 
@@ -57,6 +57,10 @@ final class LoadJourney4PixService
                 'original' => $amount,
             ],
             'chave' => Config::setting('receiver_pix_key'),
+            'devedor' => [
+                $payerData['payerDocType'] => $payerData['payerDocValue'],
+                'nome' => $payerData['clientFullName'],
+            ],
         ];
 
         $pixDescription = Config::setting('pix_descrip');

@@ -142,6 +142,32 @@ function setupJourney4Flow () {
 
   let inFlight = false
 
+  const renderJourney4Error = (message, profileUrl) => {
+    if (!error) {
+      return
+    }
+
+    error.style.display = 'block'
+    error.textContent = ''
+
+    const messageNode = document.createElement('span')
+    messageNode.textContent = message
+    error.appendChild(messageNode)
+
+    if (profileUrl) {
+      const actionWrapper = document.createElement('div')
+      actionWrapper.style.marginTop = '10px'
+
+      const profileLink = document.createElement('a')
+      profileLink.href = profileUrl
+      profileLink.className = 'btn btn-warning btn-sm'
+      profileLink.textContent = 'Atualizar dados do perfil'
+
+      actionWrapper.appendChild(profileLink)
+      error.appendChild(actionWrapper)
+    }
+  }
+
   const handleLoad = () => {
     if (inFlight) {
       return
@@ -170,7 +196,9 @@ function setupJourney4Flow () {
       .then(res => res.json())
       .then(res => {
         if (!res.success) {
-          throw new Error((res.data && res.data.error) || 'Não foi possível carregar o Pix Automático.')
+          const apiError = new Error((res.data && res.data.error) || 'Não foi possível carregar o Pix Automático.')
+          apiError.profileUrl = res.data && res.data.profileUrl
+          throw apiError
         }
 
         const qrCodeText = res.data.qrCodeText
@@ -207,10 +235,7 @@ function setupJourney4Flow () {
           loader.style.display = 'none'
         }
 
-        if (error) {
-          error.style.display = 'block'
-          error.textContent = err.message
-        }
+        renderJourney4Error(err.message, err.profileUrl)
 
         if (retryBtn) {
           retryBtn.style.display = 'block'

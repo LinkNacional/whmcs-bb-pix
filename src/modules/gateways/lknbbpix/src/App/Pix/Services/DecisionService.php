@@ -3,6 +3,7 @@
 namespace Lkn\BBPix\App\Pix\Services;
 
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
+use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Logger;
 use Throwable;
 
@@ -23,6 +24,10 @@ final class DecisionService
 
     public function evaluate(string $origemFatura, int $clientId, int $dueDay): string
     {
+        if (!Config::setting('enable_pix_automatic')) {
+            return self::MANUAL_TRADICIONAL;
+        }
+
         try {
             $origemFatura = strtoupper(trim($origemFatura));
 

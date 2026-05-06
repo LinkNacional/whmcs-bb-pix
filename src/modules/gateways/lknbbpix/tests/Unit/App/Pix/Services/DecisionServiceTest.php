@@ -10,6 +10,20 @@ use RuntimeException;
 
 final class DecisionServiceTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $GLOBALS['lknbbpix_gateway_variables']['enable_pix_automatic'] = 'on';
+    }
+
+    protected function tearDown(): void
+    {
+        $GLOBALS['lknbbpix_gateway_variables']['enable_pix_automatic'] = 'on';
+
+        parent::tearDown();
+    }
+
     /**
      * @dataProvider evaluateProvider
      */
@@ -76,6 +90,23 @@ final class DecisionServiceTest extends TestCase
                 'success' => false,
                 'data' => ['reason' => 'db offline']
             ]);
+
+        $service = new DecisionService($authRepository);
+
+        self::assertSame(
+            DecisionService::MANUAL_TRADICIONAL,
+            $service->evaluate('CRON_RENOVACAO', 10, 15)
+        );
+    }
+
+    public function testEvaluateReturnsManualTraditionalWhenPixAutomaticIsDisabled(): void
+    {
+        $GLOBALS['lknbbpix_gateway_variables']['enable_pix_automatic'] = 'off';
+
+        $authRepository = $this->createMock(AuthRepository::class);
+
+        $authRepository->expects(self::never())
+            ->method('findApprovedByClientAndDueDay');
 
         $service = new DecisionService($authRepository);
 
