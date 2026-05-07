@@ -12,13 +12,14 @@ Este README foi escrito para administradores de WHMCS, equipes de suporte e time
 5. [Instalacao](#instalacao)
 6. [Configuracao inicial no WHMCS](#configuracao-inicial-no-whmcs)
 7. [Como usar no dia a dia](#como-usar-no-dia-a-dia)
-8. [Atualizacao do modulo](#atualizacao-do-modulo)
-9. [Remocao do modulo](#remocao-do-modulo)
-10. [Checklist de validacao pos-instalacao](#checklist-de-validacao-pos-instalacao)
-11. [Problemas comuns e solucoes](#problemas-comuns-e-solucoes)
-12. [Boas praticas de seguranca](#boas-praticas-de-seguranca)
-13. [Notas tecnicas](#notas-tecnicas)
-14. [Referencias oficiais BB](#referencias-oficiais-bb)
+8. [Webhooks e Processo de Cobranca](#webhooks-e-processo-de-cobranca)
+9. [Atualizacao do modulo](#atualizacao-do-modulo)
+10. [Remocao do modulo](#remocao-do-modulo)
+11. [Checklist de validacao pos-instalacao](#checklist-de-validacao-pos-instalacao)
+12. [Problemas comuns e solucoes](#problemas-comuns-e-solucoes)
+13. [Boas praticas de seguranca](#boas-praticas-de-seguranca)
+14. [Notas tecnicas](#notas-tecnicas)
+15. [Referencias oficiais BB](#referencias-oficiais-bb)
 
 ## Visao geral
 O modulo permite receber pagamentos via Pix diretamente nas faturas do WHMCS, com:
@@ -126,6 +127,130 @@ Nunca misture credencial de homologacao em ambiente de producao.
 3. O QR Code sera gerado automaticamente.
 4. O cliente paga no app bancario.
 5. A fatura e atualizada conforme confirmacao automatica ou verificacao manual.
+
+## Webhooks e Processo de Cobranca
+
+### O que sao webhooks?
+Webhooks sao chamadas HTTP automaticas que o Banco do Brasil realiza para notificar seu WHMCS sobre eventos importantes:
+- Pagamento recebido
+- Autorizacao de pagamento recorrente aprovada
+- Falha ou cancelamento de cobranca recorrente
+
+Dessa forma, o sistema nao precisa ficar consultando a API constantemente (polling) — fica notificado em tempo real.
+
+### Tipos de webhooks suportados
+
+#### 1. webhook.php — Pix Imediato
+- **Quando acionado:** Quando um cliente paga um Pix gerado normalmente.
+- **O que faz:** Confirma automaticamente o pagamento na fatura.
+- **Registrado em:** Configuracoes > Pagamentos > Gateways de Pagamento (lknbbpix).
+
+#### 2. webhookrec.php — Autorizacao de Pagamento Recorrente
+- **Quando acionado:** Quando o cliente autoriza ou cancela um pagamento recorrente (Pix Automatico - Jornada 4).
+- **Eventos recebidos:**
+  - `CRIADA` — Autorizacao iniciada, aguardando aceite do cliente.
+  - `APROVADA` — Cliente aceito no app. Sistema ja pode cobrar automaticamente.
+  - `CANCELADA` — Cliente cancelou a autorizacao. Sem cobranças futuras.
+  - `REJEITADA` — Banco rejeitou a autorizacao.
+  - `REVOGADA` — Autorizacao revogada pelo cliente no banco.
+- **O que faz:** Atualiza o status da autorizacao (coluna `status` em `mod_lknbbpix_auths`).
+- **Resultado:** Quando status = APROVADA, futuras cobranças automaticas serao disparadas conforme ciclo configurado.
+
+#### 3. webhookcobr.php — Resultado da Cobranca Automatica
+- **Quando acionado:** Quando uma cobranca automatica (Pix Automatico) e liquidada, falha ou expira.
+- **Eventos recebidos:**
+  - `CONCLUIDA` — Pix foi pago. Sistema marca a fatura como Paid.
+  - `REJEITADA` — Cliente rejeitou ou banco negou. Fatura permanece aberta.
+  - `EXPIRADA` — Cobranca expirou. Fatura permanece aberta.
+  - `CANCELADA` — Cobranca foi cancelada. Fatura permanece aberta.
+- **O que faz:**
+  - Se CONCLUIDA: chama `addInvoicePayment()` para confirmar e marcar como Paid.
+  - Se REJEITADA/EXPIRADA/CANCELADA: adiciona nota na fatura e pedido informando a falha. WHMCS continua com sua automacao nativa de inadimplencia.
+- **Resultado:** Fatura confirmada ou falha registrada para rastreamento.
+
+### Configuracao de Webhooks no Banco do Brasil
+
+#### Registro Manual
+1. Acesse o painel de configuracoes do modulo (Configuracao > Pagamentos > Gateways).
+2. Clique no botao "Inserir Webhooks do Banco".
+3. Sistema valida HTTPS e credenciais, depois registra automaticamente.
+4. Tabela exibira status "Registrado" (verde) ou mensagem de erro.
+
+#### Ciclo de vida da authorization (Pix Automatico)
+
+```
+Cliente em WHMCS
+    ↓
+[Fatura criada + Cliente com autorizacao APROVADA para o ciclo?]
+    ├─ SIM → Cobranca automatica via PUT /cobr/{txid} no vencimento
+    │         ↓
+    │         Banco envia webhookcobr
+    │         ↓
+    │         CONCLUIDA? → Fatura marcada Paid
+    │         REJEITADA/EXPIRADA? → Nota adicionada, fatura permanece Unpaid
+    │
+    └─ NAO → Oferece Jornada 4 (QR Code composto para autorizacao)
+             ↓
+             Cliente autoriza (ou rejeita) no app bancario
+             ↓
+             Banco envia webhookrec
+             ↓
+             Status = APROVADA → proximo ciclo dispara cobranca automatica
+             Status = CANCELADA/REJEITADA → nenhuma cobranca futura para este ciclo
+```
+
+### Cancelamento de Autorizacao
+
+Quando um cliente cancela a autorizacao no app do banco:
+
+1. Banco envia webhook `webhookrec.php` com `status = CANCELADA`.
+2. Sistema atualiza `mod_lknbbpix_auths` para `status = CANCELADA`.
+3. **Resultado:** Autorizacao fica inativa. Futuras tentativas de cobranca recorrente para esse ciclo nao serao mais disparadas.
+4. Cliente pode:
+   - Autorizar novamente (nova Jornada 4)
+   - Pagar manualmente cada fatura
+   - Deixar faturas vencerem conforme decisao de negocio
+
+### Monitoramento e Logs
+
+Todos os eventos de webhook sao registrados no log de transacoes do WHMCS. Para ativar logs adicionais:
+
+1. Acesse: Configuracao > Outras inforacoes de sistema > Utilitarios > Historico de transacoes.
+2. Ative "Log de transacoes do gateway".
+3. Procure por entradas do modulo `lknbbpix`.
+
+Cada webhook registra:
+- Tipo de evento (CRIADA, APROVADA, CONCLUIDA, etc.)
+- ID da fatura ou autorizacao
+- Resultado da operacao
+
+### Validacao de Webhooks em Producao
+
+Checklist apos ativar em producao:
+
+1. Tabela de webhooks mostra status "Registrado" (verde) para webhook e webhookcobr.
+2. Pelo menos um pagamento de teste foi confirmado automaticamente (webhook.php).
+3. Um teste de autorizacao recorrente foi aprovado e status em `mod_lknbbpix_auths` mudou para APROVADA.
+4. Uma cobranca recorrente foi dispara e resultado foi recebido em `webhookcobr.php` (CONCLUIDA ou REJEITADA).
+5. Logs nao mostram erros de conexao ou payloads invalidos.
+
+### Troubleshooting - Webhook nao funcionando
+
+Se o webhook nao esta funcionando:
+
+1. **Verificar registro:** Tabela de webhooks mostra "Nao registrado" ou erro?
+   - Clique "Inserir Webhooks do Banco" novamente.
+   - Valide que HTTPS esta ativo.
+   - Confirme credenciais no portal BB Developers.
+
+2. **Verificar HTTPS:** Webhook so funciona com HTTPS. Confirme https://{seu_whmcs}/modules/gateways/lknbbpix/webhook.php.
+
+3. **Firewall/Bloqueio:** Se BB consegue ver seu WHMCS?
+   - Teste manualmente acessando a URL do webhook  via navegador (deve retornar POST 405 - metodo nao permitido).
+
+4. **Payload nao chegando:** Habilitar verbose logging no painel Logs.
+
+5. **Regenerar webhooks:** Na tabela, clique "Remover Webhooks", aguarde, depois clique "Inserir Webhooks do Banco".
 
 ## Atualizacao do modulo
 ### Fluxo recomendado (seguro)
