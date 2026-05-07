@@ -95,23 +95,30 @@ final class ParserHelperTest extends TestCase
 
     public function testExtractInvoiceIdFromDeterministicTxid(): void
     {
-        $txid = 'LKN0000000123ABCDE12345FGH';
+        $txid = 'LKN0000000123ABCDE12345ABC';
 
         self::assertSame(123, ParserHelper::extractInvoiceIdFromTxid($txid));
     }
 
     public function testExtractInvoiceIdFromDeterministicTxidIsCaseInsensitive(): void
     {
-        $txid = 'lkn0000000456abcde12345fgh';
+        $txid = 'lkn0000000456abcde12345abc';
 
         self::assertSame(456, ParserHelper::extractInvoiceIdFromTxid($txid));
     }
 
     public function testExtractInvoiceIdFromDeterministicTxidWithZeroReturnsZero(): void
     {
-        $txid = 'LKN0000000000ABCDE12345FGH';
+        $txid = 'LKN0000000000ABCDE12345ABC';
 
         self::assertSame(0, ParserHelper::extractInvoiceIdFromTxid($txid));
+    }
+
+    public function testExtractInvoiceIdFromRealDeterministicTxid(): void
+    {
+        $txid = 'LKN0000065362ACADEA96976C8';
+
+        self::assertSame(65362, ParserHelper::extractInvoiceIdFromTxid($txid));
     }
 
     public function testExtractInvoiceIdFromLegacyTxid(): void

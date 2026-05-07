@@ -12,6 +12,7 @@ use Lkn\BBPix\App\Pix\Controllers\DiscountController;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\PixController;
 use Lkn\BBPix\App\Pix\Services\DecisionService;
+use Lkn\BBPix\App\Pix\Services\DiscountService;
 use Lkn\BBPix\App\Pix\Services\LoadJourney4PixService;
 use Lkn\BBPix\App\Pix\Services\PixTxidService;
 use Lkn\BBPix\Helpers\Auth;
@@ -195,12 +196,42 @@ switch ($request->action) {
 
             $qrCodeBase64 = (new QRCode($qrOptions))->render($emv);
 
+            $invoiceApiData = localAPI('GetInvoice', ['invoiceid' => $invoiceId]);
+
+            if (($invoiceApiData['result'] ?? '') !== 'success') {
+                Logger::log(
+                    'Falha ao consultar fatura no load-journey4-qrcode',
+                    ['invoiceId' => $invoiceId],
+                    $invoiceApiData
+                );
+            }
+
+            $invoiceValue = (float) ($invoiceApiData['balance'] ?? 0.0);
+            $pixValue = (float) (new DiscountService($invoiceId))->calculate();
+            $discountPercentage = null;
+            $taxAmount = null;
+
+            if ($pixValue < $invoiceValue && $invoiceValue > 0.0) {
+                $discountAmount = $pixValue - $invoiceValue;
+                $discountPercentage = abs(($discountAmount / $invoiceValue) * 100);
+                $discountPercentage = number_format($discountPercentage, 0, ',', '.');
+            }
+
+            if ($pixValue > $invoiceValue) {
+                $taxAmount = $pixValue - $invoiceValue;
+                $taxAmount = number_format($taxAmount, 2, ',', '.');
+            }
+
             http_response_code(200);
             Response::api(true, [
                 'qrCodeText' => $emv,
                 'qrCodeBase64' => $qrCodeBase64,
                 'idRec' => $journeyResponse['data']['idRec'] ?? null,
                 'cached' => $journeyResponse['data']['cached'] ?? false,
+                'invoiceValue' => $invoiceValue,
+                'pixValue' => $pixValue,
+                'discountPercentage' => $discountPercentage,
+                'taxAmount' => $taxAmount,
             ]);
         } catch (Throwable $e) {
             Logger::log(

@@ -1,3 +1,28 @@
+{capture name="lknbbpixEconomicSummary"}
+    {if isset($invoiceValue) && isset($pixValue)}
+        {assign var="showEconomicSummary" value=($invoiceValue|string_format:"%.2f" !== $pixValue|string_format:"%.2f")}
+        <div
+            class="col-12"
+            id="lknbbpix-economic-summary"
+            style="margin-top: 15px; {if !$showEconomicSummary}display: none;{/if}"
+        >
+            <div id="lknbbpix-economic-invoice-line">De <s>R$ <span id="lknbbpix-invoice-value-label">{$invoiceValue|string_format:"%.2f"}</span></s></div>
+            <div style="color: #91960F; font-weight: 500; font-size: 1.2em;">
+                por R$ <span id="lknbbpix-pix-value-label">{$pixValue|string_format:"%.2f"}</span>
+                <span
+                    id="lknbbpix-discount-badge"
+                    class="badge badge-danger"
+                    style="{if !$discountPercentage}display: none;{/if}"
+                >{$discountPercentage}% off</span>
+                <span
+                    id="lknbbpix-tax-label"
+                    style="font-size: .75em; color: #a94442; margin-left: 8px; {if !$taxAmount}display: none;{/if}"
+                >+ R$ {$taxAmount} de juros</span>
+            </div>
+        </div>
+    {/if}
+{/capture}
+
 {if $pixFlow === 'COBR_AUTOMATICO'}
     <div class="lkn-pix-bb-feedback alert alert-info" role="alert">
         {$autoPixMessage|default:'Esta fatura será cobrada automaticamente no vencimento via Pix Automático.'}
@@ -21,6 +46,8 @@
 
     <div class="container" id="lknbbpix-auto-flow">
         <div class="row">
+            {$smarty.capture.lknbbpixEconomicSummary}
+
             <div class="col-12" style="margin-top: 15px; margin-bottom: 15px;">
                 <div id="lknbbpix-auto-loader" class="alert alert-info" role="alert">
                     Carregando proposta do Pix Automático...
@@ -134,21 +161,7 @@
 
     <div class="container">
         <div class="row">
-
-            {if $invoiceValue|string_format:"%.2f" !== $pixValue|string_format:"%.2f"}
-                <div
-                    class="col-12"
-                    style="margin-top: 15px;"
-                >
-                    <div>De <s>R$ {$invoiceValue|string_format:"%.2f"}</s></div>
-                    <div style="color: #91960F; font-weight: 500; font-size: 1.2em;">
-                        por R$ {$pixValue|string_format:"%.2f"}
-                        {if $discountPercentage}
-                            <span class="badge badge-danger">{$discountPercentage}% off</span>
-                        {/if}
-                    </div>
-                </div>
-            {/if}
+            {$smarty.capture.lknbbpixEconomicSummary}
 
             <div class="col-12">
                 <img

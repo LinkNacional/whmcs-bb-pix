@@ -139,8 +139,56 @@ function setupJourney4Flow () {
   const qrWrapper = document.getElementById('lknbbpix-auto-qr-wrapper')
   const qrImage = document.getElementById('lknbbpix-auto-qr-image')
   const invoiceIdInput = document.getElementById('lknbbpix-invoice-id')
+  const economicSummary = document.getElementById('lknbbpix-economic-summary')
+  const invoiceValueLabel = document.getElementById('lknbbpix-invoice-value-label')
+  const pixValueLabel = document.getElementById('lknbbpix-pix-value-label')
+  const discountBadge = document.getElementById('lknbbpix-discount-badge')
+  const taxLabel = document.getElementById('lknbbpix-tax-label')
 
   let inFlight = false
+
+  const formatMoney = (value) => {
+    return Number(value || 0).toFixed(2).replace('.', ',')
+  }
+
+  const updateEconomicSummary = (data) => {
+    if (!economicSummary || !invoiceValueLabel || !pixValueLabel) {
+      return
+    }
+
+    const invoiceValue = Number(data.invoiceValue || 0)
+    const pixValue = Number(data.pixValue || 0)
+
+    // Keep initial Smarty values when API returns invalid economic data.
+    if (invoiceValue <= 0) {
+      return
+    }
+
+    const hasDifference = Number(invoiceValue.toFixed(2)) !== Number(pixValue.toFixed(2))
+
+    invoiceValueLabel.textContent = formatMoney(invoiceValue)
+    pixValueLabel.textContent = formatMoney(pixValue)
+
+    economicSummary.style.display = hasDifference ? 'block' : 'none'
+
+    if (discountBadge) {
+      if (data.discountPercentage) {
+        discountBadge.style.display = 'inline-block'
+        discountBadge.textContent = `${data.discountPercentage}% off`
+      } else {
+        discountBadge.style.display = 'none'
+      }
+    }
+
+    if (taxLabel) {
+      if (data.taxAmount) {
+        taxLabel.style.display = 'inline'
+        taxLabel.textContent = `+ R$ ${data.taxAmount} de juros`
+      } else {
+        taxLabel.style.display = 'none'
+      }
+    }
+  }
 
   const renderJourney4Error = (message, profileUrl) => {
     if (!error) {
@@ -208,9 +256,11 @@ function setupJourney4Flow () {
           throw new Error('Resposta inválida da jornada 4.')
         }
 
+        updateEconomicSummary(res.data)
+
         if (pixTextArea) {
           pixTextArea.value = qrCodeText
-          pixTextArea.style.display = 'block'
+          /* pixTextArea.style.display = 'block' */ // Keep the textarea hidden as per new design, but still populate it with the QR code text for copy functionality.
         }
 
         if (copyPixTextBtn) {

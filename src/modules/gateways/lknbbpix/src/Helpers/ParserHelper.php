@@ -4,6 +4,12 @@ namespace Lkn\BBPix\Helpers;
 
 final class ParserHelper
 {
+    private const TXID_PREFIX = 'LKN';
+
+    private const PADDED_INVOICE_LENGTH = 10;
+
+    private const HASH_LENGTH = 13;
+
     public static function findFirstValue(array $data, array $keys): string
     {
         foreach ($keys as $key) {
@@ -52,7 +58,14 @@ final class ParserHelper
     {
         $txid = strtoupper(trim($txid));
 
-        if (preg_match('/^LKN(\d{10})[A-Z0-9]{13}$/', $txid, $matches)) {
+        $deterministicPattern = sprintf(
+            '/^%s(\d{%d})[A-F0-9]{%d}$/',
+            preg_quote(self::TXID_PREFIX, '/'),
+            self::PADDED_INVOICE_LENGTH,
+            self::HASH_LENGTH
+        );
+
+        if (preg_match($deterministicPattern, $txid, $matches)) {
             $invoice = ltrim($matches[1], '0');
 
             return (int) ($invoice === '' ? '0' : $invoice);

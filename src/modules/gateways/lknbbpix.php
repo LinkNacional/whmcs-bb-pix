@@ -3,6 +3,7 @@
 use Lkn\BBPix\App\Pix\Exceptions\PixException;
 use Lkn\BBPix\App\Pix\PixController;
 use Lkn\BBPix\App\Pix\Services\DecisionService;
+use Lkn\BBPix\App\Pix\Services\DiscountService;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Formatter;
 use Lkn\BBPix\Helpers\Invoice;
@@ -560,6 +561,22 @@ function lknbbpix_link($params): string
         $payerDocValue = $payerResolution['data']['payerDocValue'];
 
         if ($flowDecision === DecisionService::JORNADA4) {
+            $pixValue = (float) (new DiscountService((int) $invoiceId))->calculate();
+            $discountPercentage = null;
+            $taxAmount = null;
+
+            if ($pixValue < $paymentValue) {
+                $discountAmount = $pixValue - $paymentValue;
+
+                $discountPercentage = abs(($discountAmount / $paymentValue) * 100);
+                $discountPercentage = number_format($discountPercentage, 0, ',', '.');
+            }
+
+            if ($pixValue > $paymentValue) {
+                $taxAmount = $pixValue - $paymentValue;
+                $taxAmount = number_format($taxAmount, 2, ',', '.');
+            }
+
             $csrfToken = bin2hex(random_bytes(32));
             $_SESSION['lkn-bb-pix'] = $csrfToken;
 
@@ -570,6 +587,9 @@ function lknbbpix_link($params): string
                     'csrfToken' => $csrfToken,
                     'invoiceId' => (int) $invoiceId,
                     'invoiceValue' => (float) $paymentValue,
+                    'pixValue' => $pixValue,
+                    'discountPercentage' => $discountPercentage,
+                    'taxAmount' => $taxAmount,
                     'max_client_manual_checks' => $params['max_client_manual_checks'] ?? 5,
                     'whmcsInstallUrl' => $whmcsInstallUrl,
                 ]

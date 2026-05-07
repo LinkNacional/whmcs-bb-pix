@@ -13,8 +13,19 @@ use Lkn\BBPix\Helpers\Logger;
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/../../../init.php';
 require_once __DIR__ . '/../../../includes/gatewayfunctions.php';
+require_once __DIR__ . '/../../../includes/invoicefunctions.php';
 
-$request = json_decode(file_get_contents('php://input'));
+$rawPayload = file_get_contents('php://input');
+
+http_response_code(200);
+header('Content-Type: text/plain');
+echo 'OK';
+
+if (function_exists('fastcgi_finish_request')) {
+    fastcgi_finish_request();
+}
+
+$request = json_decode((string) $rawPayload);
 
 Logger::log('webhook', ['request' => $request]);
 
@@ -31,6 +42,18 @@ $paidAmount = $pix->valor;
 $paymentDate = $pix->horario;
 $endToEndId = $pix->endToEndId;
 
-$confirmPaymentService = new ConfirmPaymentService();
+try {
+    $confirmPaymentService = new ConfirmPaymentService();
 
-$confirmPaymentService->run($apiTxId, $paidAmount, $paymentDate, $endToEndId);
+    $confirmPaymentService->run($apiTxId, $paidAmount, $paymentDate, $endToEndId);
+} catch (Throwable $e) {
+    Logger::log(
+        'webhook: erro interno no processamento',
+        [
+            'rawPayload' => $rawPayload,
+            'apiTxId' => $apiTxId,
+            'endToEndId' => $endToEndId,
+        ],
+        ['error' => $e->getMessage()]
+    );
+}

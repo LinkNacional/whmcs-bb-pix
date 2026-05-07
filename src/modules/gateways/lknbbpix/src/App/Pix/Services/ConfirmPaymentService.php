@@ -2,10 +2,11 @@
 
 namespace Lkn\BBPix\App\Pix\Services;
 
-use DateTime;
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
 use Lkn\BBPix\Helpers\Invoice;
 use Lkn\BBPix\Helpers\Logger;
+use Lkn\BBPix\Helpers\ParserHelper;
+use WHMCS\Database\Capsule;
 
 /**
  * Responsible for making the required operations to set an invoice as paid.
@@ -20,11 +21,57 @@ final class ConfirmPaymentService
         string $paymentDate,
         string $pixEndToEndId
     ): void {
-        $pixTaxId = PixTaxId::fromApi('PAGO', $apiTxId);
-        $invoiceId = $pixTaxId->invoiceId;
+        $pixTaxId = null;
+        $invoiceId = 0;
 
-        $invoiceLastTransaction = Invoice::getTransactionByTransactionId($invoiceId, 'PAGOx' . $pixTaxId->suffix . 'x' . $pixEndToEndId);
-        $totalResults = (int) $invoiceLastTransaction['totalresults'] ?? 0;
+        try {
+            $pixTaxId = PixTaxId::fromApi('PAGO', $apiTxId);
+            $invoiceId = $pixTaxId->invoiceId;
+        } catch (\Throwable) {
+            $invoiceId = 0;
+        }
+
+        if ($invoiceId <= 0) {
+            $invoiceId = ParserHelper::extractInvoiceIdFromTxid($apiTxId);
+        }
+
+        if ($invoiceId <= 0) {
+            Logger::log(
+                'ConfirmPaymentService: invoiceId inválido no webhook',
+                [
+                    'apiTxId' => $apiTxId,
+                    'endToEndId' => $pixEndToEndId,
+                    'paymentDate' => $paymentDate,
+                    'paidAmount' => $paidAmount,
+                ],
+                ['critical' => true, 'reason' => 'invoiceId <= 0 após fallback']
+            );
+
+            return;
+        }
+
+        $transactionId = $this->resolveTransactionId($pixEndToEndId, $apiTxId, $pixTaxId);
+
+        if ($this->isInvoiceAlreadyPaid($invoiceId)) {
+            Logger::log(
+                'ConfirmPaymentService: pagamento já processado (fatura paga)',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'apiTxId' => $apiTxId]
+            );
+
+            return;
+        }
+
+        if ($this->transactionExists($invoiceId, $transactionId)) {
+            Logger::log(
+                'ConfirmPaymentService: pagamento já processado (transação existente)',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'apiTxId' => $apiTxId]
+            );
+
+            return;
+        }
+
+        $invoiceLastTransaction = Invoice::getTransactionByTransactionId($invoiceId, $transactionId);
+        $totalResults = (int) ($invoiceLastTransaction['totalresults'] ?? 0);
 
         // Para evitar que um mesmo pedido seja pago múltiplas vezes
         // Com isso a verificação do webhook e do front-end não duplicam o pagamento
@@ -92,37 +139,69 @@ final class ConfirmPaymentService
             }
         }
 
-        $invoiceClientId = Invoice::getClientId($invoiceId);
-        $whmcsTransacId = $pixTaxId->getTransIdForWhmcs($pixEndToEndId);
-
-        $whmcsPaymentDate = (new DateTime($paymentDate))->format('d/m/Y');
-
-        $addTranscResponse = Invoice::addTransac(
-            $invoiceClientId,
-            $invoiceId,
-            $whmcsTransacId,
-            $paidAmount,
-            $whmcsPaymentDate
-        );
-
-        if ($addTranscResponse['result'] !== 'success') {
-            $this->addNoteToInvoice(
-                $invoiceId,
-                'Pix: erro ao adicionar transação à fatura'
+        if (!function_exists('addInvoicePayment')) {
+            Logger::log(
+                'ConfirmPaymentService: addInvoicePayment indisponível',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount],
+                ['critical' => true]
             );
+
+            return;
         }
 
-        $setInvoiceAsPaidResponse = [];
+        try {
+            addInvoicePayment($invoiceId, $transactionId, (float) $paidAmount, 0.0, 'lknbbpix');
 
-        if ($paidAmount >= $invoiceBalance) {
-            $setInvoiceAsPaidResponse = $this->setInvoiceAsPaid($invoiceId);
+            Logger::log(
+                'ConfirmPaymentService: baixa aplicada via addInvoicePayment',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount]
+            );
+        } catch (\Throwable $e) {
+            Logger::log(
+                'ConfirmPaymentService: erro ao aplicar baixa via addInvoicePayment',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount],
+                ['error' => $e->getMessage()]
+            );
+        }
+    }
+
+    private function resolveTransactionId(string $pixEndToEndId, string $apiTxId, ?PixTaxId $pixTaxId): string
+    {
+        $transactionId = strtoupper(trim($pixEndToEndId));
+
+        if ($transactionId !== '') {
+            return $transactionId;
         }
 
-        if (isset($setInvoiceAsPaidResponse['result']) && $setInvoiceAsPaidResponse['result'] !== 'success') {
-            $this->addNoteToInvoice(
-                $invoiceId,
-                'Pix: erro ao marcar fatura como paga'
-            );
+        if ($pixTaxId instanceof PixTaxId && str_contains($apiTxId, 'x') && $pixTaxId->suffix !== '') {
+            return 'PAGOx' . $pixTaxId->suffix;
+        }
+
+        return strtoupper(trim($apiTxId));
+    }
+
+    private function isInvoiceAlreadyPaid(int $invoiceId): bool
+    {
+        try {
+            $status = Capsule::table('tblinvoices')
+                ->where('id', $invoiceId)
+                ->value('status');
+
+            return strtolower((string) $status) === 'paid';
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function transactionExists(int $invoiceId, string $transactionId): bool
+    {
+        try {
+            return Capsule::table('tblaccounts')
+                ->where('invoiceid', $invoiceId)
+                ->where('transid', $transactionId)
+                ->exists();
+        } catch (\Throwable) {
+            return false;
         }
     }
 
@@ -150,25 +229,6 @@ final class ConfirmPaymentService
         return [
             'taxAmount' => $taxAmount
         ];
-    }
-
-    private function setInvoiceAsPaid(int $invoiceId)
-    {
-        $postData = [
-            'invoiceid' => $invoiceId,
-            'status' => 'Paid',
-            'datepaid' => date('Y-m-d')
-        ];
-
-        $response = localAPI('UpdateInvoice', $postData);
-
-        Logger::log(
-            'Adicionar nota sobre desconto',
-            ['invoiceId' => $invoiceId],
-            ['UpdateInvoice' => $response]
-        );
-
-        return $response;
     }
 
     private function addNoteToInvoice(int $invoiceId, string $note): void
