@@ -11,7 +11,7 @@ class PixAutoRepository extends AbstractPixApiRepository
 {
     public function __construct()
     {
-        parent::__construct('cobv.write payloadlocationrec.read payloadlocationrec.write rec.write rec.read cobr.write');
+        parent::__construct('webhook.write cobr.read cobv.read webhookcobr.read payloadlocationrec.write payloadlocation.read cobv.write webhookrec.write cob.write rec.write webhookrec.read cobr.write solicrec.read lotecobv.write solicrec.write pix-bb.read webhooksolicrec.read pix.write payloadlocationrec.read payloadlocation.write lotecobv.read cob.read webhook.read pix.read webhooksolicrec.write webhookcobr.write rec.read');
     }
 
     public function criarCobV(string $txid, array $payload): array|string
