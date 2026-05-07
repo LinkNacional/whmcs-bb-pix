@@ -35,6 +35,27 @@ header('Content-Type: application/json;');
 
 $authState = new CurrentUser();
 
+$isWebhookNotRegisteredError = static function (array $result): bool {
+    if (($result['success'] ?? false) === true) {
+        return false;
+    }
+
+    $type = (string) ($result['data']['type'] ?? '');
+    $detail = (string) ($result['data']['detail'] ?? '');
+
+    if (
+        str_contains($type, 'WebhookRecNaoEncontrado') ||
+        str_contains($type, 'WebhookCobRNaoEncontrado')
+    ) {
+        return true;
+    }
+
+    return str_contains($type, 'OperacaoInvalida') && (
+        str_contains($detail, 'Não há webhook cadastrado') ||
+        str_contains($detail, 'Nao ha webhook cadastrado')
+    );
+};
+
 switch ($request->action) {
     // The form request this endpoint to check if the invoice is paid each 18 seconds.
     case 'check-invoice-status':
@@ -127,9 +148,108 @@ switch ($request->action) {
             $recResult  = $repo->removerWebhookRec();
             $cobrResult = $repo->removerWebhookCobr();
 
+            $recOk = (bool) ($recResult['success'] ?? false) || $isWebhookNotRegisteredError($recResult);
+            $cobrOk = (bool) ($cobrResult['success'] ?? false) || $isWebhookNotRegisteredError($cobrResult);
+            $overallSuccess = $recOk && $cobrOk;
+
+            $warnings = [];
+
+            if (!$recOk) {
+                $warnings[] = 'Falha ao remover webhookrec.';
+            }
+
+            if (!$cobrOk) {
+                $warnings[] = 'Falha ao remover webhookcobr.';
+            }
+
+            if (!$overallSuccess) {
+                Logger::log(
+                    'Falha parcial ao remover webhooks na API do BB',
+                    ['action' => 'remove-webhooks'],
+                    ['rec' => $recResult, 'cobr' => $cobrResult]
+                );
+            }
+
             http_response_code(200);
-            Response::api(true, ['rec' => $recResult, 'cobr' => $cobrResult]);
+            Response::api($overallSuccess, [
+                'rec' => $recResult,
+                'cobr' => $cobrResult,
+                'warnings' => $warnings,
+            ]);
         } catch (Throwable $e) {
+            Logger::log(
+                'Falha ao remover webhooks na API do BB',
+                ['action' => 'remove-webhooks'],
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                ]
+            );
+
+            http_response_code(500);
+            Response::api(false, ['error' => $e->getMessage()]);
+        }
+
+        break;
+
+    case 'register-webhooks':
+        if (!Auth::isAdminLogged(['Configure Payment Gateways'])) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado.']);
+        }
+
+        $systemUrl = (string) Capsule::table('tblconfiguration')
+            ->where('setting', 'SystemURL')
+            ->value('value');
+
+        if (!str_starts_with($systemUrl, 'https://')) {
+            http_response_code(422);
+            Response::api(false, ['error' => 'SystemURL não utiliza HTTPS. O Banco do Brasil exige URL segura para registrar webhooks.']);
+        }
+
+        try {
+            $repo = new PixAutoRepository();
+            $recResult  = $repo->registrarWebhookRec();
+            $cobrResult = $repo->registrarWebhookCobr();
+
+            $recOk = (bool) ($recResult['success'] ?? false);
+            $cobrOk = (bool) ($cobrResult['success'] ?? false);
+            $overallSuccess = $recOk && $cobrOk;
+
+            $warnings = [];
+
+            if (!$recOk) {
+                $warnings[] = 'Falha ao registrar webhookrec.';
+            }
+
+            if (!$cobrOk) {
+                $warnings[] = 'Falha ao registrar webhookcobr.';
+            }
+
+            if (!$overallSuccess) {
+                Logger::log(
+                    'Falha parcial ao registrar webhooks na API do BB',
+                    ['action' => 'register-webhooks', 'systemUrl' => $systemUrl],
+                    ['rec' => $recResult, 'cobr' => $cobrResult]
+                );
+            }
+
+            http_response_code(200);
+            Response::api($overallSuccess, [
+                'rec' => $recResult,
+                'cobr' => $cobrResult,
+                'warnings' => $warnings,
+            ]);
+        } catch (Throwable $e) {
+            Logger::log(
+                'Falha ao registrar webhooks na API do BB',
+                ['action' => 'register-webhooks', 'systemUrl' => $systemUrl],
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                ]
+            );
+
             http_response_code(500);
             Response::api(false, ['error' => $e->getMessage()]);
         }

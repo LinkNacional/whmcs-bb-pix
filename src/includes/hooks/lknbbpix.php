@@ -218,7 +218,15 @@ add_hook('ClientAreaPageViewInvoice', 1, function (array $vars): array {
  *   WHMCS config-save flow.
  */
 add_hook('UpdateAdminPaymentGateway', 1, function (array $vars): void {
-    if (($vars['gateway'] ?? '') !== 'lknbbpix') {
+    $gateway = (string) ($vars['gateway'] ?? '');
+
+    Logger::log(
+        'UpdateAdminPaymentGateway disparado',
+        ['gateway' => $gateway],
+        ['willHandle' => $gateway === 'lknbbpix']
+    );
+
+    if ($gateway !== 'lknbbpix') {
         return;
     }
 
