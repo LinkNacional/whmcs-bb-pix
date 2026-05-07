@@ -6,6 +6,7 @@ use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Invoice;
+use Lkn\BBPix\Helpers\Validator;
 use RuntimeException;
 
 final class LoadJourney4PixService
@@ -78,19 +79,70 @@ final class LoadJourney4PixService
             throw new RuntimeException('ID da location não retornado pela API do BB.');
         }
 
+        if (!isset($payerData['clientFullName'], $payerData['payerDocType'], $payerData['payerDocValue'])) {
+            throw new RuntimeException('Dados do pagador incompletos para criar recorrência.');
+        }
+
+        $payerDocType = strtolower(trim((string) $payerData['payerDocType']));
+        $payerDocValue = preg_replace('/\D/', '', (string) $payerData['payerDocValue']);
+        $clientFullName = trim((string) $payerData['clientFullName']);
+        $convenioConfigurado = trim((string) Config::setting('convenio'));
+        $recurrenceObjectName = trim((string) Config::setting('recurrence_object_name'));
+
+        if (!in_array($payerDocType, ['cpf', 'cnpj'], true)) {
+            throw new RuntimeException('Tipo de documento do pagador inválido para recorrência.');
+        }
+
+        if ($payerDocValue === '') {
+            throw new RuntimeException('Documento do pagador não informado para recorrência.');
+        }
+
+        if ($payerDocType === 'cpf' && !Validator::cpf($payerDocValue)) {
+            throw new RuntimeException('CPF do pagador inválido para recorrência.');
+        }
+
+        if ($payerDocType === 'cnpj' && !Validator::cnpj($payerDocValue)) {
+            throw new RuntimeException('CNPJ do pagador inválido para recorrência.');
+        }
+
+        if ($clientFullName === '') {
+            throw new RuntimeException('Nome do pagador não informado para recorrência.');
+        }
+
+        if ($recurrenceObjectName === '') {
+            $recurrenceObjectName = 'Fatura WHMCS';
+        }
+
+        $recurrenceObjectName = function_exists('mb_substr')
+            ? mb_substr($recurrenceObjectName, 0, 140)
+            : substr($recurrenceObjectName, 0, 140);
+
+        $dataInicial = date('Y-m-d', strtotime($dueDate));
+
         $recPayload = [
+            'vinculo' => [
+                'objeto' => $recurrenceObjectName,
+                'contrato' => (string) $invoiceId,
+                'devedor' => [
+                    'nome' => function_exists('mb_substr') ? mb_substr($clientFullName, 0, 140) : substr($clientFullName, 0, 140),
+                    $payerDocType => $payerDocValue,
+                ],
+            ],
             'calendario' => [
-                'expiracao' => Config::setting('pix_expiration') * 86400,
+                'dataInicial'   => $dataInicial,
+                'periodicidade' => 'MENSAL',
             ],
             'valor' => [
-                'original' => $amount,
+                'valorRec' => number_format((float) $amount, 2, '.', ''),
             ],
-            'chave' => Config::setting('receiver_pix_key'),
-            'location' => $locationId,
+            'loc' => (int) $locationId,
+            'politicaRetentativa' => 'NAO_PERMITE',
         ];
 
-        if ($pixDescription !== '') {
-            $recPayload['solicitacaoPagador'] = $pixDescription;
+        if ($convenioConfigurado !== '') {
+            $recPayload['recebedor'] = [
+                'convenio' => $convenioConfigurado,
+            ];
         }
 
         $recData = $this->extractSuccessData($this->repository->criarRecorrencia($recPayload), 'criarRecorrencia');
@@ -149,9 +201,19 @@ final class LoadJourney4PixService
 
     private function extractEmv(array $data): string
     {
+        // Procura no nível raiz primeiro
         foreach (['pixCopiaECola', 'emv', 'qrCode', 'pixCopiaCola'] as $key) {
             if (!empty($data[$key])) {
                 return (string) $data[$key];
+            }
+        }
+
+        // Se não encontrou, procura dentro de dadosQR (resposta do BB para Jornada 4)
+        if (isset($data['dadosQR']) && is_array($data['dadosQR'])) {
+            foreach (['pixCopiaECola', 'emv', 'qrCode', 'pixCopiaCola'] as $key) {
+                if (!empty($data['dadosQR'][$key])) {
+                    return (string) $data['dadosQR'][$key];
+                }
             }
         }
 

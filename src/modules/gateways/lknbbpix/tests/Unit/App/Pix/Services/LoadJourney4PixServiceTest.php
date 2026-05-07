@@ -12,7 +12,7 @@ final class LoadJourney4PixServiceTest extends TestCase
     private const PAYER_DATA = [
         'clientFullName' => 'Empresa Teste LTDA',
         'payerDocType' => 'cnpj',
-        'payerDocValue' => '12345678000199',
+        'payerDocValue' => '28552001000168',
     ];
 
     public function testRunReturnsCachedEmvWhenCreatedAuthorizationAlreadyHasPayload(): void
@@ -110,12 +110,29 @@ final class LoadJourney4PixServiceTest extends TestCase
 
         $pixRepo->expects(self::once())
             ->method('criarLocationRecorrencia')
-            ->willReturn(['success' => true, 'data' => ['location' => 'LOC_123']]);
+            ->willReturn(['success' => true, 'data' => ['id' => 123]]);
 
         $pixRepo->expects(self::once())
             ->method('criarRecorrencia')
             ->with(self::callback(function (array $payload): bool {
-                return isset($payload['location']) && $payload['location'] === 'LOC_123';
+                return isset($payload['vinculo']['objeto'])
+                    && isset($payload['vinculo']['contrato'])
+                    && isset($payload['vinculo']['devedor']['nome'])
+                    && isset($payload['vinculo']['devedor']['cnpj'])
+                    && isset($payload['calendario']['dataInicial'])
+                    && isset($payload['calendario']['periodicidade'])
+                    && isset($payload['valor']['valorRec'])
+                    && isset($payload['loc'])
+                    && isset($payload['politicaRetentativa'])
+                    && isset($payload['recebedor']['convenio'])
+                    && $payload['vinculo']['objeto'] === 'Fatura WHMCS'
+                    && $payload['vinculo']['devedor']['nome'] === self::PAYER_DATA['clientFullName']
+                    && $payload['vinculo']['devedor']['cnpj'] === self::PAYER_DATA['payerDocValue']
+                    && $payload['calendario']['periodicidade'] === 'MENSAL'
+                    && $payload['valor']['valorRec'] === '100.00'
+                    && $payload['loc'] === 123
+                    && $payload['politicaRetentativa'] === 'NAO_PERMITE'
+                    && $payload['recebedor']['convenio'] === '34627';
             }))
             ->willReturn(['success' => true, 'data' => ['idRec' => 'REC_NEW_003']]);
 
@@ -137,5 +154,101 @@ final class LoadJourney4PixServiceTest extends TestCase
         self::assertSame('REC_NEW_003', $response['data']['idRec']);
         self::assertSame('EMV_NEW_003', $response['data']['emv']);
         self::assertFalse($response['data']['cached']);
+    }
+
+    public function testRunThrowsWhenPayerDocTypeIsInvalid(): void
+    {
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->method('findCreatedByClientAndDueDay')->willReturn([
+            'success' => true,
+            'data' => ['auth' => null],
+        ]);
+
+        $pixRepo->method('criarCobV')->willReturn(['success' => true, 'data' => ['ok' => true]]);
+        $pixRepo->method('criarLocationRecorrencia')->willReturn(['success' => true, 'data' => ['id' => 1]]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Tipo de documento do pagador inválido para recorrência.');
+
+        $service->run(2001, 103, 10, 'LKN0000002001ABCDE1234567', [
+            'clientFullName' => 'Cliente Inválido',
+            'payerDocType' => 'ie',
+            'payerDocValue' => '123',
+        ]);
+    }
+
+    public function testRunDoesNotSendRecebedorWhenConvenioIsEmpty(): void
+    {
+        $GLOBALS['lknbbpix_gateway_variables']['convenio'] = '';
+
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->method('findCreatedByClientAndDueDay')->willReturn([
+            'success' => true,
+            'data' => ['auth' => null],
+        ]);
+
+        $pixRepo->method('criarCobV')->willReturn(['success' => true, 'data' => ['ok' => true]]);
+        $pixRepo->method('criarLocationRecorrencia')->willReturn(['success' => true, 'data' => ['id' => 2]]);
+
+        $pixRepo->expects(self::once())
+            ->method('criarRecorrencia')
+            ->with(self::callback(function (array $payload): bool {
+                return !isset($payload['recebedor']);
+            }))
+            ->willReturn(['success' => true, 'data' => ['idRec' => 'REC_NEW_004']]);
+
+        $pixRepo->method('obterQrCodeComposto')->willReturn(['success' => true, 'data' => ['pixCopiaECola' => 'EMV_NEW_004']]);
+        $authRepo->method('salvarCriada')->willReturn(['success' => true, 'data' => ['id' => 2]]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $response = $service->run(2002, 104, 10, 'LKN0000002002ABCDE1234567', self::PAYER_DATA);
+
+        self::assertTrue($response['success']);
+        self::assertSame('REC_NEW_004', $response['data']['idRec']);
+
+        $GLOBALS['lknbbpix_gateway_variables']['convenio'] = '34627';
+    }
+
+    public function testRunUsesFallbackObjectNameWhenConfigIsEmpty(): void
+    {
+        $GLOBALS['lknbbpix_gateway_variables']['recurrence_object_name'] = '';
+
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->method('findCreatedByClientAndDueDay')->willReturn([
+            'success' => true,
+            'data' => ['auth' => null],
+        ]);
+
+        $pixRepo->method('criarCobV')->willReturn(['success' => true, 'data' => ['ok' => true]]);
+        $pixRepo->method('criarLocationRecorrencia')->willReturn(['success' => true, 'data' => ['id' => 99]]);
+
+        $pixRepo->expects(self::once())
+            ->method('criarRecorrencia')
+            ->with(self::callback(function (array $payload): bool {
+                return isset($payload['vinculo']['objeto'])
+                    && $payload['vinculo']['objeto'] === 'Fatura WHMCS';
+            }))
+            ->willReturn(['success' => true, 'data' => ['idRec' => 'REC_NEW_005']]);
+
+        $pixRepo->method('obterQrCodeComposto')->willReturn(['success' => true, 'data' => ['pixCopiaECola' => 'EMV_NEW_005']]);
+        $authRepo->method('salvarCriada')->willReturn(['success' => true, 'data' => ['id' => 3]]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $response = $service->run(2003, 105, 12, 'LKN0000002003ABCDE1234567', self::PAYER_DATA);
+
+        self::assertTrue($response['success']);
+        self::assertSame('REC_NEW_005', $response['data']['idRec']);
+
+        $GLOBALS['lknbbpix_gateway_variables']['recurrence_object_name'] = 'Fatura WHMCS';
     }
 }

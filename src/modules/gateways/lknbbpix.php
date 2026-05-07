@@ -199,6 +199,20 @@ HTML
             'Size' => '25'
         ],
 
+        'convenio' => [
+            'FriendlyName' => 'Número do Convênio (Pix Automático)',
+            'Description' => 'Número do convênio do Banco do Brasil vinculado à sua aplicação. Obrigatório para o fluxo de Pix Automático / recorrência.',
+            'Type' => 'text',
+            'Size' => '25'
+        ],
+
+        'cnpj_recebedor' => [
+            'FriendlyName' => 'CNPJ do Recebedor (Pix Automático)',
+            'Description' => 'CNPJ da empresa recebedora (somente números). Obrigatório para o fluxo de Pix Automático / recorrência.',
+            'Type' => 'text',
+            'Size' => '25'
+        ],
+
         'pix_expiration' => [
             'FriendlyName' => 'Expiração do Pix *',
             'Description' => 'Data da expiração do Pix em dias. Por padrão, é 1 dia. Deixe vazio para seguir o padrão. Máximo de 24855 dias.',
@@ -220,6 +234,14 @@ HTML
             'Type' => 'text',
             'Size' => '140',
             'Description' => 'Esse dado podem ser vistos no aplicativo de pagamento. Deixe vazio para não enviar nenhuma descrição Máximo de 140 caracteres.'
+        ],
+
+        'recurrence_object_name' => [
+            'FriendlyName' => 'Texto da recorrência (Pix Automático)',
+            'Type' => 'text',
+            'Size' => '140',
+            'Default' => 'Fatura WHMCS',
+            'Description' => 'Texto exibido no app bancário para inclusão da recorrência (campo vinculo.objeto). Exemplo: Link Nacional.'
         ],
 
         'send_payer_doc_and_name' => [

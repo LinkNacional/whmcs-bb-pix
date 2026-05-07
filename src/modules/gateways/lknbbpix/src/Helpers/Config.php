@@ -56,6 +56,7 @@ final class Config
     {
         return match ($name) {
             'pix_descrip' => substr(trim($value), 0, 140),
+            'recurrence_object_name' => substr(trim((string) $value), 0, 140),
             'pix_expiration' => empty($value) ? 1 : ((int) ($value)),
             'cnpj_cf_id' => (int) ($value),
             'cpf_cf_id' => (int) ($value),
@@ -79,6 +80,8 @@ final class Config
             'fine' => is_numeric($value) ? $value : '0',
             'fine_days' => is_numeric($value) ? $value : '1',
             'enable_fees_calculation' => (bool) $value,
+            'convenio' => trim((string) $value),
+            'cnpj_recebedor' => preg_replace('/\D/', '', (string) $value),
             default => trim($value)
         };
     }

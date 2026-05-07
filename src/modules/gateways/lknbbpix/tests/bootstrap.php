@@ -7,7 +7,10 @@ $GLOBALS['lknbbpix_gateway_variables'] = [
     'fine_days' => '1',
     'pix_expiration' => '1',
     'receiver_pix_key' => 'teste@pix.com',
+    'convenio' => '34627',
+    'cnpj_recebedor' => '28552001000168',
     'pix_descrip' => '',
+    'recurrence_object_name' => 'Fatura WHMCS',
     'enable_pix_automatic' => 'on',
 ];
 
