@@ -87,6 +87,35 @@ switch ($request->action) {
 
         break;
 
+    case 'get-webhooks':
+        if (!Auth::isAdminLogged(['Configure Payment Gateways'])) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado.']);
+        }
+
+        try {
+            $repo = new PixAutoRepository();
+            $recResult  = $repo->consultarWebhookRec();
+            $cobrResult = $repo->consultarWebhookCobr();
+
+            http_response_code(200);
+            Response::api(true, ['rec' => $recResult, 'cobr' => $cobrResult]);
+        } catch (Throwable $e) {
+            Logger::log(
+                'Falha ao consultar webhooks na API do BB',
+                ['action' => 'get-webhooks'],
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                ]
+            );
+
+            http_response_code(500);
+            Response::api(false, ['error' => $e->getMessage()]);
+        }
+
+        break;
+
     case 'remove-webhooks':
         if (!Auth::isAdminLogged(['Configure Payment Gateways'])) {
             http_response_code(403);

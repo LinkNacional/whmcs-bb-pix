@@ -159,6 +159,52 @@ class PixAutoRepository extends AbstractPixApiRepository
         }
     }
 
+    public function consultarWebhookRec(): array|string
+    {
+        try {
+            return $this->handleResponse(
+                'Consultar webhookrec na API do BB',
+                [],
+                $this->requestWithScopes(
+                    'webhookrec.read',
+                    'GET',
+                    'webhookrec'
+                )
+            );
+        } catch (Throwable $th) {
+            Logger::log(
+                'Falha ao consultar webhookrec na API do BB',
+                [],
+                ['error' => $th->getMessage()]
+            );
+
+            return Response::return(false, ['reason' => $th->getMessage()]);
+        }
+    }
+
+    public function consultarWebhookCobr(): array|string
+    {
+        try {
+            return $this->handleResponse(
+                'Consultar webhookcobr na API do BB',
+                [],
+                $this->requestWithScopes(
+                    'webhookcobr.read',
+                    'GET',
+                    'webhookcobr'
+                )
+            );
+        } catch (Throwable $th) {
+            Logger::log(
+                'Falha ao consultar webhookcobr na API do BB',
+                [],
+                ['error' => $th->getMessage()]
+            );
+
+            return Response::return(false, ['reason' => $th->getMessage()]);
+        }
+    }
+
     private function handleResponse(string $logLabel, array $request, array $response): array|string
     {
         Logger::log($logLabel, $request, $response);
