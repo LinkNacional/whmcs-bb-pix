@@ -178,28 +178,73 @@ Dessa forma, o sistema nao precisa ficar consultando a API constantemente (polli
 
 #### Ciclo de vida da authorization (Pix Automatico)
 
+**Ponto-chave:** A cobrança é disparada **IMEDIATAMENTE** quando a fatura é criada, não no vencimento.
+
 ```
-Cliente em WHMCS
-    ↓
-[Fatura criada + Cliente com autorizacao APROVADA para o ciclo?]
-    ├─ SIM → Cobranca automatica via PUT /cobr/{txid} no vencimento
-    │         ↓
-    │         Banco envia webhookcobr
-    │         ↓
-    │         CONCLUIDA? → Fatura marcada Paid
-    │         REJEITADA/EXPIRADA? → Nota adicionada, fatura permanece Unpaid
-    │
-    └─ NAO → Oferece Jornada 4 (QR Code composto para autorizacao)
-             ↓
-             Cliente autoriza (ou rejeita) no app bancario
-             ↓
-             Banco envia webhookrec
-             ↓
-             Status = APROVADA → proximo ciclo dispara cobranca automatica
-             Status = CANCELADA/REJEITADA → nenhuma cobranca futura para este ciclo
+┌─ PRIMEIRO CICLO (Cliente novo ou novo due_day)
+│  Fatura criada com vencimento no dia 15
+│  ❌ Cliente não tem autorização APROVADA para vencimento=15
+│  └─ Sistema oferece Jornada 4 (QR Code composto)
+│     ↓
+│     Cliente escaneia e autoriza no app bancário
+│     ↓
+│     Banco envia webhookrec com status = APROVADA
+│     ↓
+│     Sistema salva em mod_lknbbpix_auths:
+│        - client_id: [ID do cliente]
+│        - id_rec: [Autorização do BB]
+│        - due_day: 15 (vinculado a este dia do mês)
+│        - status: APROVADA
+│
+├─ PRÓXIMO CICLO (Renovação automática cron)
+│  Fatura criada com vencimento no dia 15 (same due_day)
+│  ✅ Cliente TEM autorização APROVADA para due_day=15
+│  └─ Sistema IMEDIATAMENTE envia cobrança:
+│     ↓
+│     PUT /cobr/{txid} com dataDeVencimento=15
+│     ↓
+│     Pix é agendado na conta do cliente para aquela data
+│     ↓
+│     Banco envia webhookcobr no vencimento
+│     ↓
+│     CONCLUIDA? → Fatura marcada Paid
+│     REJEITADA/EXPIRADA? → Nota adicionada, fatura permanece Unpaid
+│
+└─ MUDANÇA DE VENCIMENTO (Ex: 15 → 20)
+   Fatura criada com vencimento = 20 (novo due_day)
+   ❌ Não há autorização para due_day=20 (só tem para 15)
+   └─ Sistema oferece nova Jornada 4 (novo ciclo de autorização)
+      (A autorização anterior para due_day=15 permanece válida
+       mas só será usada se faturas vencerem no dia 15 novamente)
 ```
 
-### Cancelamento de Autorizacao
+**Regra importante - Imutabilidade:** A autorização é **permanentemente vinculada ao `due_day`** (dia do mês). Se o vencimento muda, você precisa de uma nova autorização para o novo ciclo. Não reutilize autorização de outro `due_day`.
+
+### Timing da Cobrança Automática
+
+**Quando a cobrança é disparada?**
+
+A cobrança automática (`PUT /cobr/{txid}`) é disparada **IMEDIATAMENTE na geração da fatura**, não no vencimento. Fluxo:
+
+1. **Fatura criada** (novo pedido ou renovação cron)
+2. **Hook `InvoiceCreationPreEmail` acionado**
+3. Sistema verifica: `"Cliente tem autorização APROVADA para este due_day?"`
+4. **SIM** → Dispara `ScheduleAutomaticChargeService`:
+   - Envia `PUT /cobr/{txid}` para Banco do Brasil
+   - Com `dataDeVencimento` = data de vencimento da fatura
+   - Com `valor.original` = saldo da fatura
+   - Pix fica **agendado** na conta do cliente para aquela data
+   - Nota adicionada na fatura: "Pagamento agendado via Pix Automático para o dia DD/MM/YYYY."
+
+5. **Resultado:** O Pix não aparece imediatamente na conta do cliente, mas fica em agendamento para o vencimento.
+
+**Pode haver discrepância entre criação e vencimento:**
+- Se fatura criada em 01/mai com vencimento 15/mai
+- Cobrança enviada ao BB em 01/mai
+- Pix só aparece na conta do cliente em ~14/mai (véspera do vencimento)
+- Liquidação acontece no dia 15/mai
+
+Cancelamento de Autorizacao
 
 Quando um cliente cancela a autorizacao no app do banco:
 
