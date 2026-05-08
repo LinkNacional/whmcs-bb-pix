@@ -70,7 +70,7 @@ class PixAutoRepository extends AbstractPixApiRepository
         );
     }
 
-    public function cancelarRecorrencia(string $idRec): array|string
+    public function cancelarRecorrencia(string $idRec, int $timeoutSeconds = 10): array|string
     {
         try {
             $payload = ['status' => 'CANCELADA'];
@@ -82,7 +82,9 @@ class PixAutoRepository extends AbstractPixApiRepository
                     'rec.write',
                     'PATCH',
                     "rec/$idRec",
-                    $payload
+                    $payload,
+                    [],
+                    $timeoutSeconds
                 )
             );
         } catch (Throwable $th) {

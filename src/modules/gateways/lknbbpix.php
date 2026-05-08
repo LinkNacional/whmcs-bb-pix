@@ -715,7 +715,7 @@ function lknbbpix_resolve_invoice_flow(int $invoiceId, int $clientId): array
 
     $decision = $origin === InvoiceOriginHelper::MANUAL_TRADICIONAL
         ? DecisionService::MANUAL_TRADICIONAL
-        : (new DecisionService())->evaluate($origin, $clientId, $dueDay);
+        : (new DecisionService())->evaluate($origin, $clientId, $dueDay, $invoiceId);
 
     return [
         'decision' => $decision,

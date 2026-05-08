@@ -33,9 +33,10 @@ abstract class AbstractPixApiRepository
         string $method,
         string $endpoint,
         array|string $body = [],
-        array $headers = []
+        array $headers = [],
+        ?int $timeoutSeconds = null
     ): array {
-        return $this->performRequest($this->accessToken, $method, $endpoint, $body, $headers);
+        return $this->performRequest($this->accessToken, $method, $endpoint, $body, $headers, $timeoutSeconds);
     }
 
     protected function requestWithScopes(
@@ -43,7 +44,8 @@ abstract class AbstractPixApiRepository
         string $method,
         string $endpoint,
         array|string $body = [],
-        array $headers = []
+        array $headers = [],
+        ?int $timeoutSeconds = null
     ): array {
         $requestAccessTokenResponse = $this->requestAccessToken($scopes);
 
@@ -56,7 +58,8 @@ abstract class AbstractPixApiRepository
             $method,
             $endpoint,
             $body,
-            $headers
+            $headers,
+            $timeoutSeconds
         );
     }
 
@@ -70,7 +73,8 @@ abstract class AbstractPixApiRepository
         string $method,
         string $endpoint,
         array|string $body = [],
-        array $headers = []
+        array $headers = [],
+        ?int $timeoutSeconds = null
     ): array {
         $baseUrl = Config::constant("{$this->envCode}.baseUrl");
         $querySeparator = str_contains($endpoint, '?') ? '&' : '?';
@@ -81,7 +85,7 @@ abstract class AbstractPixApiRepository
             'Content-Type: application/json'
         ]);
 
-        return $this->httpRequest($method, $baseUrl, $endpoint, $body, $requestHeaders);
+        return $this->httpRequest($method, $baseUrl, $endpoint, $body, $requestHeaders, $timeoutSeconds);
     }
 
     protected function logApiFailure(string $result, array $request, array $response): void
@@ -106,7 +110,8 @@ abstract class AbstractPixApiRepository
         string $baseUrl,
         string $endpoint,
         array|string $body = [],
-        array $headers = []
+        array $headers = [],
+        ?int $timeoutSeconds = null
     ): array {
         $request = curl_init();
         $requestUrl = "$baseUrl/$endpoint";
@@ -119,6 +124,11 @@ abstract class AbstractPixApiRepository
             CURLOPT_SSLCERT => Config::constant('public_key_path'),
             CURLOPT_SSLKEY => Config::constant('private_key_path')
         ];
+
+        if ($timeoutSeconds !== null && $timeoutSeconds > 0) {
+            $curlOptions[CURLOPT_CONNECTTIMEOUT] = min(5, $timeoutSeconds);
+            $curlOptions[CURLOPT_TIMEOUT] = $timeoutSeconds;
+        }
 
         if (count($headers) > 0) {
             $curlOptions[CURLOPT_HTTPHEADER] = $headers;

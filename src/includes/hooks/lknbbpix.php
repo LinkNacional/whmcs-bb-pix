@@ -2,6 +2,7 @@
 
 use Lkn\BBPix\App\Pix\Controllers\DiscountController;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
+use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\App\Pix\Services\DecisionService;
 use Lkn\BBPix\App\Pix\Services\ConfirmPaymentService;
 use Lkn\BBPix\App\Pix\Services\InvoiceNoteService;
@@ -122,7 +123,7 @@ add_hook('InvoiceCreationPreEmail', 1, function (array $vars): array {
             return [];
         }
 
-        $decision = (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay);
+        $decision = (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $invoiceId);
 
         if ($decision !== DecisionService::COBR_AUTOMATICO) {
             return [];
@@ -141,30 +142,25 @@ add_hook('InvoiceCreationPreEmail', 1, function (array $vars): array {
             return [];
         }
 
-        $pixTaxId = PixTaxId::fromDeterministicTxid($txid, 'CRIADO');
-        $addTransacResponse = Invoice::addTransac(
+        $scheduledTaxId = PixTaxId::fromDeterministicTxid($txid, 'AGENDADA');
+        lknbbpix_register_transaction_if_missing(
             $clientId,
             $invoiceId,
-            $pixTaxId->getTransIdForWhmcs(),
-            0.0,
-            '',
+            $scheduledTaxId->getTransIdForWhmcs(),
             'Pix Automático agendado',
-            0.0,
-            'lknbbpix'
+            'Falha ao registrar AGENDADAx para Pix Automático',
+            ['invoiceId' => $invoiceId, 'txid' => $txid]
         );
 
-        if (($addTransacResponse['result'] ?? '') !== 'success') {
-            Logger::log(
-                'Falha ao registrar CRIADOx para Pix Automático',
-                [
-                    'invoiceId' => $invoiceId,
-                    'pixTaxId' => $pixTaxId->getTransIdForWhmcs(),
-                    'txid' => $txid
-                ],
-                $addTransacResponse
-            );
-            // Mas continua mesmo se falhar, não retorna
-        }
+        $createdTaxId = PixTaxId::fromDeterministicTxid($txid, 'CRIADO');
+        lknbbpix_register_transaction_if_missing(
+            $clientId,
+            $invoiceId,
+            $createdTaxId->getTransIdForWhmcs(),
+            'Pix Automático agendado',
+            'Falha ao registrar CRIADOx para Pix Automático',
+            ['invoiceId' => $invoiceId, 'txid' => $txid]
+        );
 
         $dueDate = date('d/m/Y', strtotime((string) $invoice->duedate));
 
@@ -213,7 +209,7 @@ add_hook('ClientAreaPageViewInvoice', 1, function (array $vars): array {
 
         $decision = $invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL
             ? DecisionService::MANUAL_TRADICIONAL
-            : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay);
+            : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $invoiceId);
 
         return [
             'lknbbpixFlowDecision' => $decision,
@@ -317,3 +313,174 @@ add_hook('UpdateAdminPaymentGateway', 1, function (array $vars): void {
         );
     }
 });
+
+add_hook('PreCronJob', 1, function (): void {
+    $batchLimit = 50;
+    $hoursThreshold = 24;
+
+    try {
+        $authRepository = new AuthRepository();
+        $pixAutoRepository = new PixAutoRepository();
+
+        $staleResponse = $authRepository->findCreatedOlderThanHours($hoursThreshold, $batchLimit);
+
+        if (!($staleResponse['success'] ?? false)) {
+            Logger::log(
+                'PreCronJob Pix Automático: falha ao buscar CRIADA vencidas',
+                ['hoursThreshold' => $hoursThreshold, 'batchLimit' => $batchLimit],
+                $staleResponse
+            );
+
+            return;
+        }
+
+        $auths = (array) ($staleResponse['data']['auths'] ?? []);
+        $summary = [
+            'candidates' => count($auths),
+            'updated_status' => 0,
+            'updated_touch' => 0,
+            'retry_needed' => 0,
+            'errors' => 0,
+        ];
+
+        foreach ($auths as $auth) {
+            $itemStart = microtime(true);
+
+            try {
+                $idRec = trim((string) ($auth->id_rec ?? ''));
+
+                if ($idRec === '') {
+                    $summary['errors']++;
+                    continue;
+                }
+
+                $cancelResponse = $pixAutoRepository->cancelarRecorrencia($idRec, 10);
+                $finalStatus = lknbbpix_extract_final_cancel_status($cancelResponse);
+
+                if (in_array($finalStatus, ['CANCELADA', 'REVOGADA'], true)) {
+                    $updateStatusResponse = $authRepository->atualizarStatusPorIdRec($idRec, $finalStatus);
+
+                    Logger::log(
+                        'PreCronJob Pix Automático: created_expired_cancel_success',
+                        ['idRec' => $idRec, 'finalStatus' => $finalStatus],
+                        ['cancelResponse' => $cancelResponse, 'updateStatusResponse' => $updateStatusResponse]
+                    );
+
+                    $summary['updated_status']++;
+                    continue;
+                }
+
+                $touchResponse = $authRepository->touchUpdatedAtByIdRec($idRec);
+
+                Logger::log(
+                    'PreCronJob Pix Automático: created_expired_cancel_retry',
+                    ['idRec' => $idRec],
+                    ['cancelResponse' => $cancelResponse, 'touchResponse' => $touchResponse]
+                );
+
+                $summary['updated_touch']++;
+                $summary['retry_needed']++;
+            } catch (Throwable $e) {
+                $summary['errors']++;
+
+                Logger::log(
+                    'PreCronJob Pix Automático: erro em item de cancelamento',
+                    [
+                        'idRec' => (string) ($auth->id_rec ?? ''),
+                        'elapsedSeconds' => round(microtime(true) - $itemStart, 3)
+                    ],
+                    ['error' => $e->getMessage()]
+                );
+            }
+        }
+
+        Logger::log(
+            'PreCronJob Pix Automático: resumo de execução',
+            ['hoursThreshold' => $hoursThreshold, 'batchLimit' => $batchLimit],
+            $summary
+        );
+    } catch (Throwable $e) {
+        Logger::log(
+            'PreCronJob Pix Automático: erro global (não fatal)',
+            ['hoursThreshold' => $hoursThreshold, 'batchLimit' => $batchLimit],
+            ['error' => $e->getMessage()]
+        );
+    }
+});
+
+function lknbbpix_register_transaction_if_missing(
+    int $clientId,
+    int $invoiceId,
+    string $transId,
+    string $description,
+    string $errorLogLabel,
+    array $extraContext = []
+): void {
+    try {
+        if ($invoiceId <= 0 || trim($transId) === '') {
+            return;
+        }
+
+        $exists = Capsule::table('tblaccounts')
+            ->where('invoiceid', $invoiceId)
+            ->where('transid', $transId)
+            ->exists();
+
+        if ($exists) {
+            return;
+        }
+
+        $addTransacResponse = Invoice::addTransac(
+            $clientId,
+            $invoiceId,
+            $transId,
+            0.0,
+            '',
+            $description,
+            0.0,
+            'lknbbpix'
+        );
+
+        if (($addTransacResponse['result'] ?? '') !== 'success') {
+            Logger::log(
+                $errorLogLabel,
+                array_merge($extraContext, ['transId' => $transId]),
+                $addTransacResponse
+            );
+        }
+    } catch (Throwable $e) {
+        Logger::log(
+            $errorLogLabel,
+            array_merge($extraContext, ['transId' => $transId]),
+            ['error' => $e->getMessage()]
+        );
+    }
+}
+
+function lknbbpix_extract_final_cancel_status(array|string $cancelResponse): string
+{
+    if (!is_array($cancelResponse)) {
+        return '';
+    }
+
+    $data = (array) ($cancelResponse['data'] ?? []);
+    $status = strtoupper(trim((string) ($data['status'] ?? $data['situacao'] ?? $data['estado'] ?? '')));
+
+    if (in_array($status, ['CANCELADA', 'REVOGADA'], true)) {
+        return $status;
+    }
+
+    $detail = strtoupper(trim((string) ($data['detail'] ?? '')));
+    $title = strtoupper(trim((string) ($data['title'] ?? '')));
+    $text = $detail . ' ' . $title;
+
+    if (str_contains($text, 'REVOGAD')) {
+        return 'REVOGADA';
+    }
+
+    if (str_contains($text, 'CANCELAD')) {
+        return 'CANCELADA';
+    }
+
+    return '';
+}
