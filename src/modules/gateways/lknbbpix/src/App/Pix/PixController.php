@@ -99,10 +99,24 @@ final class PixController
                 'status' => $response['status'],
                 'refundTransId' => $response['refundTransId']
             ]);
-        } catch (Throwable $e) {
+        } catch (PixException $e) {
             Logger::log($e->exceptionCode->label(), [$e]);
 
-            return Response::return(false, ['error' => $e->exceptionCode->label()]);
+            return Response::return(false, [
+                'error' => $e->exceptionCode->label(),
+                'errorMsg' => $e->exceptionCode->label()
+            ]);
+        } catch (Throwable $e) {
+            Logger::log('Refund Error', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return Response::return(false, [
+                'error' => 'Não foi possível solicitar a devolução do Pix.',
+                'errorMsg' => 'Não foi possível solicitar a devolução do Pix.'
+            ]);
         }
     }
 
@@ -176,16 +190,36 @@ final class PixController
 
         $transacs = $localApiResponse['transactions']['transaction'] ?? [];
 
+        if (!is_array($transacs) || count($transacs) === 0) {
+            return Response::return(false, ['code' => 'invoice-has-no-transactions']);
+        }
+
         $latestTransac = end($transacs);
+
+        if (!is_array($latestTransac) || !isset($latestTransac['gateway'], $latestTransac['transid'])) {
+            return Response::return(false, ['code' => 'invoice-has-invalid-transactions']);
+        }
 
         // The last invoice transaction must have been entered by the gateway.
         if ($latestTransac['gateway'] !== Config::constant('name')) {
             return Response::return(false, ['code' => 'invoice-has-wrong-payment-method']);
         }
 
-        $pixTaxId = PixTaxId::fromWhmcsTransId($latestTransac['transid'], $invoiceId);
+        try {
+            $pixTaxId = PixTaxId::fromWhmcsTransId($latestTransac['transid'], $invoiceId);
+            $consultPixResponse = $this->pixApiRepository->consultPix($pixTaxId);
+        } catch (Throwable $e) {
+            Logger::log(
+                'PixController: erro ao consultar Pix da fatura',
+                [
+                    'invoiceId' => $invoiceId,
+                    'transid' => $latestTransac['transid']
+                ],
+                ['error' => $e->getMessage()]
+            );
 
-        $consultPixResponse = $this->pixApiRepository->consultPix($pixTaxId);
+            return Response::return(false, ['code' => 'could-not-consult-pix']);
+        }
 
         return Response::return(true, $consultPixResponse);
     }

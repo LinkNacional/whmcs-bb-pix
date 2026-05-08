@@ -73,11 +73,35 @@ function lknbbpix_config()
                     $table->string('periodicidade', 25);
                     $table->string('status', 25);
                     $table->text('emv_payload')->nullable();
+                    $table->decimal('emv_amount_snapshot', 15, 2)->nullable();
+                    $table->date('emv_due_date_snapshot')->nullable();
+                    $table->unsignedSmallInteger('emv_version')->default(1);
                     $table->dateTime('created_at')->useCurrent();
                     $table->dateTime('updated_at')->useCurrent();
                     $table->index(['client_id', 'due_day', 'status'], 'mod_lknbbpix_auths_lookup_idx');
                 }
             );
+        } else {
+            if (!Capsule::schema()->hasColumn('mod_lknbbpix_auths', 'emv_amount_snapshot')) {
+                Capsule::schema()->table('mod_lknbbpix_auths', function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->decimal('emv_amount_snapshot', 15, 2)->nullable()->after('emv_payload');
+                });
+            }
+
+            if (!Capsule::schema()->hasColumn('mod_lknbbpix_auths', 'emv_due_date_snapshot')) {
+                Capsule::schema()->table('mod_lknbbpix_auths', function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->date('emv_due_date_snapshot')->nullable()->after('emv_amount_snapshot');
+                });
+            }
+
+            if (!Capsule::schema()->hasColumn('mod_lknbbpix_auths', 'emv_version')) {
+                Capsule::schema()->table('mod_lknbbpix_auths', function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->unsignedSmallInteger('emv_version')->default(1)->after('emv_due_date_snapshot');
+                });
+            }
         }
     } catch (Exception $e) {
         echo "Unable to create gateway tables: {$e->getMessage()}";

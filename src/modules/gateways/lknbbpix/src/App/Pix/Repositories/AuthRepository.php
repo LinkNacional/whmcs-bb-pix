@@ -4,11 +4,18 @@ namespace Lkn\BBPix\App\Pix\Repositories;
 
 use Lkn\BBPix\Helpers\Logger;
 use Lkn\BBPix\Helpers\Response;
+use WHMCS\Database\Capsule;
 use Throwable;
 
 class AuthRepository extends AbstractDbRepository
 {
     protected string $table = 'mod_lknbbpix_auths';
+
+    private ?bool $hasEmvAmountSnapshotColumn = null;
+
+    private ?bool $hasEmvDueDateSnapshotColumn = null;
+
+    private ?bool $hasEmvVersionColumn = null;
 
     public function findApprovedByClientAndDueDay(int $clientId, int $dueDay): array
     {
@@ -58,10 +65,12 @@ class AuthRepository extends AbstractDbRepository
         string $idRec,
         int $dueDay,
         string $periodicidade,
-        ?string $emvPayload = null
+        ?string $emvPayload = null,
+        ?string $emvAmountSnapshot = null,
+        ?string $emvDueDateSnapshot = null
     ): array {
         try {
-            $insertId = $this->query()->insertGetId([
+            $insertData = [
                 'client_id' => $clientId,
                 'id_rec' => $idRec,
                 'due_day' => $dueDay,
@@ -70,7 +79,17 @@ class AuthRepository extends AbstractDbRepository
                 'emv_payload' => $emvPayload,
                 'created_at' => date('Y-m-d H:i:s'),
                 'updated_at' => date('Y-m-d H:i:s')
-            ]);
+            ];
+
+            if ($this->hasEmvAmountSnapshotColumn()) {
+                $insertData['emv_amount_snapshot'] = $emvAmountSnapshot;
+            }
+
+            if ($this->hasEmvDueDateSnapshotColumn()) {
+                $insertData['emv_due_date_snapshot'] = $emvDueDateSnapshot;
+            }
+
+            $insertId = $this->query()->insertGetId($insertData);
 
             return Response::return(true, ['id' => $insertId]);
         } catch (Throwable $th) {
@@ -82,6 +101,8 @@ class AuthRepository extends AbstractDbRepository
                     'due_day' => $dueDay,
                     'periodicidade' => $periodicidade,
                     'emv_payload' => $emvPayload,
+                    'emv_amount_snapshot' => $emvAmountSnapshot,
+                    'emv_due_date_snapshot' => $emvDueDateSnapshot,
                 ],
                 ['error' => $th->getMessage()]
             );
@@ -90,15 +111,35 @@ class AuthRepository extends AbstractDbRepository
         }
     }
 
-    public function updateEmvPayload(string $idRec, string $emvPayload): array
+    public function updateEmvPayload(
+        string $idRec,
+        string $emvPayload,
+        ?string $emvAmountSnapshot = null,
+        ?string $emvDueDateSnapshot = null,
+        bool $incrementVersion = false
+    ): array
     {
         try {
+            $updateData = [
+                'emv_payload' => $emvPayload,
+                'updated_at' => date('Y-m-d H:i:s')
+            ];
+
+            if ($emvAmountSnapshot !== null && $this->hasEmvAmountSnapshotColumn()) {
+                $updateData['emv_amount_snapshot'] = $emvAmountSnapshot;
+            }
+
+            if ($emvDueDateSnapshot !== null && $this->hasEmvDueDateSnapshotColumn()) {
+                $updateData['emv_due_date_snapshot'] = $emvDueDateSnapshot;
+            }
+
+            if ($incrementVersion && $this->hasEmvVersionColumn()) {
+                $updateData['emv_version'] = Capsule::raw('emv_version + 1');
+            }
+
             $affectedRows = $this->query()
                 ->where('id_rec', $idRec)
-                ->update([
-                    'emv_payload' => $emvPayload,
-                    'updated_at' => date('Y-m-d H:i:s')
-                ]);
+                ->update($updateData);
 
             return Response::return(true, ['affectedRows' => $affectedRows]);
         } catch (Throwable $th) {
@@ -132,5 +173,32 @@ class AuthRepository extends AbstractDbRepository
 
             return Response::return(false, ['reason' => $th->getMessage()]);
         }
+    }
+
+    private function hasEmvAmountSnapshotColumn(): bool
+    {
+        if ($this->hasEmvAmountSnapshotColumn === null) {
+            $this->hasEmvAmountSnapshotColumn = Capsule::schema()->hasColumn($this->table, 'emv_amount_snapshot');
+        }
+
+        return $this->hasEmvAmountSnapshotColumn;
+    }
+
+    private function hasEmvDueDateSnapshotColumn(): bool
+    {
+        if ($this->hasEmvDueDateSnapshotColumn === null) {
+            $this->hasEmvDueDateSnapshotColumn = Capsule::schema()->hasColumn($this->table, 'emv_due_date_snapshot');
+        }
+
+        return $this->hasEmvDueDateSnapshotColumn;
+    }
+
+    private function hasEmvVersionColumn(): bool
+    {
+        if ($this->hasEmvVersionColumn === null) {
+            $this->hasEmvVersionColumn = Capsule::schema()->hasColumn($this->table, 'emv_version');
+        }
+
+        return $this->hasEmvVersionColumn;
     }
 }

@@ -7,6 +7,7 @@ use Lkn\BBPix\App\Pix\Services\ConfirmPaymentService;
 use Lkn\BBPix\App\Pix\Services\InvoiceNoteService;
 use Lkn\BBPix\App\Pix\Services\IsInvoicePixPaidService;
 use Lkn\BBPix\App\Pix\Services\PixTxidService;
+use Lkn\BBPix\App\Pix\Entity\PixTaxId;
 use Lkn\BBPix\App\Pix\Services\ScheduleAutomaticChargeService;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Invoice;
@@ -138,6 +139,31 @@ add_hook('InvoiceCreationPreEmail', 1, function (array $vars): array {
             );
 
             return [];
+        }
+
+        $pixTaxId = PixTaxId::fromDeterministicTxid($txid, 'CRIADO');
+        $addTransacResponse = Invoice::addTransac(
+            $clientId,
+            $invoiceId,
+            $pixTaxId->getTransIdForWhmcs(),
+            0.0,
+            '',
+            'Pix Automático agendado',
+            0.0,
+            'lknbbpix'
+        );
+
+        if (($addTransacResponse['result'] ?? '') !== 'success') {
+            Logger::log(
+                'Falha ao registrar CRIADOx para Pix Automático',
+                [
+                    'invoiceId' => $invoiceId,
+                    'pixTaxId' => $pixTaxId->getTransIdForWhmcs(),
+                    'txid' => $txid
+                ],
+                $addTransacResponse
+            );
+            // Mas continua mesmo se falhar, não retorna
         }
 
         $dueDate = date('d/m/Y', strtotime((string) $invoice->duedate));

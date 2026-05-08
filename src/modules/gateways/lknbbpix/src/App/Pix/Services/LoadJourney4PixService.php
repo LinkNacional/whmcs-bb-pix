@@ -15,39 +15,60 @@ final class LoadJourney4PixService
 
     private AuthRepository $authRepository;
 
+    private EnsureCreatedTransactionService $ensureCreatedTransactionService;
+
     public function __construct(?PixAutoRepository $repository = null, ?AuthRepository $authRepository = null)
     {
         $this->repository = $repository ?? new PixAutoRepository();
         $this->authRepository = $authRepository ?? new AuthRepository();
+        $this->ensureCreatedTransactionService = new EnsureCreatedTransactionService();
     }
 
     public function run(int $invoiceId, int $clientId, int $dueDay, string $txid, array $payerData): array
     {
+        $amount = $this->normalizeAmount(Invoice::getBalance($invoiceId));
+        $dueDate = $this->normalizeDueDate(Invoice::getDueDate($invoiceId));
+
         $cached = $this->authRepository->findCreatedByClientAndDueDay($clientId, $dueDay);
 
         if (($cached['success'] ?? false) && !empty($cached['data']['auth'])) {
             $cachedAuth = $cached['data']['auth'];
             $cachedEmv = trim((string) ($cachedAuth->emv_payload ?? ''));
+            $cachedAmountSnapshot = $this->normalizeAmount((float) ($cachedAuth->emv_amount_snapshot ?? 0.0));
+            $cachedDueDateSnapshot = $this->normalizeDueDate((string) ($cachedAuth->emv_due_date_snapshot ?? ''));
 
-            if ($cachedEmv !== '') {
+            if ($cachedEmv !== '' && $this->isCachedSnapshotValid($cachedAmountSnapshot, $cachedDueDateSnapshot, $amount, $dueDate)) {
                 return ['success' => true, 'data' => ['idRec' => (string) $cachedAuth->id_rec, 'emv' => $cachedEmv, 'cached' => true]];
             }
 
-            $qrResponse = $this->repository->obterQrCodeComposto((string) $cachedAuth->id_rec, $txid);
-            $qrData = $this->extractSuccessData($qrResponse, 'obterQrCodeComposto-cache');
-            $emv = $this->extractEmv($qrData);
+            // Cache miss: valor ou data mudaram - atualizar dinamicamente via PATCH
+            $patchPayload = [
+                'valor' => ['original' => $amount],
+                'calendario' => [
+                    'dataDeVencimento' => $dueDate,
+                    'validadeAposVencimento' => (string) Config::setting('fine_days')
+                ]
+            ];
 
-            if ($emv === '') {
-                throw new RuntimeException('EMV não retornado no cache-hit da recorrência.');
-            }
+            $this->extractSuccessData(
+                $this->repository->patchCobv($txid, $patchPayload),
+                'patchCobv-cache'
+            );
 
-            $this->authRepository->updateEmvPayload((string) $cachedAuth->id_rec, $emv);
+            // EMV não muda (é um URL que aponta para a cobrança atualizada no BB)
+            $emv = $cachedEmv;
 
-            return ['success' => true, 'data' => ['idRec' => (string) $cachedAuth->id_rec, 'emv' => $emv, 'cached' => true]];
+            // Atualizar snapshot na tabela para auditoria
+            $this->authRepository->updateEmvPayload(
+                (string) $cachedAuth->id_rec,
+                $emv,
+                $amount,
+                $dueDate,
+                true  // incrementVersion
+            );
+
+            return ['success' => true, 'data' => ['idRec' => (string) $cachedAuth->id_rec, 'emv' => $emv, 'cached' => false]];
         }
-
-        $amount = number_format(Invoice::getBalance($invoiceId), 2, '.', '');
-        $dueDate = Invoice::getDueDate($invoiceId);
 
         $cobvPayload = [
             'calendario' => [
@@ -159,13 +180,52 @@ final class LoadJourney4PixService
             throw new RuntimeException('EMV não retornado na jornada 4.');
         }
 
-        $saveResponse = $this->authRepository->salvarCriada($clientId, $idRec, $dueDay, 'MENSAL', $emv);
+        $saveResponse = $this->authRepository->salvarCriada(
+            $clientId,
+            $idRec,
+            $dueDay,
+            'MENSAL',
+            $emv,
+            $amount,
+            $dueDate
+        );
 
         if (!($saveResponse['success'] ?? false)) {
             throw new RuntimeException('Falha ao salvar idRec da jornada 4.');
         }
 
+        $this->ensureCreatedTransactionService->run($invoiceId, 'CRIADOx' . strtoupper(trim($txid)), 'Pix Jornada 4 gerado');
+
         return ['success' => true, 'data' => ['idRec' => $idRec, 'emv' => $emv, 'cached' => false]];
+    }
+
+    private function normalizeAmount(float $amount): string
+    {
+        return number_format($amount, 2, '.', '');
+    }
+
+    private function normalizeDueDate(string $date): string
+    {
+        $timestamp = strtotime($date);
+
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return date('Y-m-d', $timestamp);
+    }
+
+    private function isCachedSnapshotValid(
+        string $cachedAmount,
+        string $cachedDueDate,
+        string $currentAmount,
+        string $currentDueDate
+    ): bool {
+        if ($cachedAmount === '' || $cachedDueDate === '') {
+            return false;
+        }
+
+        return $cachedAmount === $currentAmount && $cachedDueDate === $currentDueDate;
     }
 
     private function extractSuccessData(array|string $response, string $step): array

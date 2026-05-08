@@ -149,6 +149,8 @@ final class ConfirmPaymentService
             return;
         }
 
+        $this->ensureCreatedTransactionExists($invoiceId, $pixTaxId, $apiTxId);
+
         try {
             addInvoicePayment($invoiceId, $transactionId, (float) $paidAmount, 0.0, 'lknbbpix');
 
@@ -167,14 +169,20 @@ final class ConfirmPaymentService
 
     private function resolveTransactionId(string $pixEndToEndId, string $apiTxId, ?PixTaxId $pixTaxId): string
     {
-        $transactionId = strtoupper(trim($pixEndToEndId));
+        $normalizedEndToEndId = strtoupper(trim($pixEndToEndId));
 
-        if ($transactionId !== '') {
+        if ($pixTaxId instanceof PixTaxId && $pixTaxId->suffix !== '') {
+            $transactionId = 'PAGOx' . $pixTaxId->suffix;
+
+            if ($normalizedEndToEndId !== '') {
+                return $transactionId . 'x' . $normalizedEndToEndId;
+            }
+
             return $transactionId;
         }
 
-        if ($pixTaxId instanceof PixTaxId && str_contains($apiTxId, 'x') && $pixTaxId->suffix !== '') {
-            return 'PAGOx' . $pixTaxId->suffix;
+        if ($normalizedEndToEndId !== '') {
+            return $normalizedEndToEndId;
         }
 
         return strtoupper(trim($apiTxId));
@@ -247,5 +255,51 @@ final class ConfirmPaymentService
             ['invoiceId' => $invoiceId, 'note' => $note],
             ['GetInvoice' => $invoice, 'UpdateInvoice' => $updateInvoiceResponse]
         );
+    }
+
+    private function ensureCreatedTransactionExists(int $invoiceId, ?PixTaxId $pixTaxId, string $apiTxId): void
+    {
+        $createdTransId = $this->resolveCreatedTransactionId($pixTaxId, $apiTxId);
+
+        if ($createdTransId === '' || $this->transactionExists($invoiceId, $createdTransId)) {
+            return;
+        }
+
+        $clientId = Invoice::getClientId($invoiceId);
+
+        $addTransacResponse = Invoice::addTransac(
+            $clientId,
+            $invoiceId,
+            $createdTransId,
+            0.0,
+            '',
+            'Pix criado (registro automático de consistência)',
+            0.0,
+            'lknbbpix'
+        );
+
+        if (($addTransacResponse['result'] ?? '') !== 'success') {
+            Logger::log(
+                'ConfirmPaymentService: falha ao registrar transação CRIADOx automática',
+                ['invoiceId' => $invoiceId, 'createdTransId' => $createdTransId],
+                $addTransacResponse
+            );
+        }
+    }
+
+    private function resolveCreatedTransactionId(?PixTaxId $pixTaxId, string $apiTxId): string
+    {
+        if ($pixTaxId instanceof PixTaxId && $pixTaxId->suffix !== '') {
+            return 'CRIADOx' . $pixTaxId->suffix;
+        }
+
+        if (!str_contains($apiTxId, 'x')) {
+            return '';
+        }
+
+        $parts = explode('x', $apiTxId, 2);
+        $suffix = trim($parts[1] ?? '');
+
+        return $suffix === '' ? '' : 'CRIADOx' . $suffix;
     }
 }

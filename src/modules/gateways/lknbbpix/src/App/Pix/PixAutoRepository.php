@@ -43,6 +43,15 @@ class PixAutoRepository extends AbstractPixApiRepository
         );
     }
 
+    public function patchCobv(string $txid, array $payload): array|string
+    {
+        return $this->handleResponse(
+            'Atualizar cobrança cobv (Pix Automático)',
+            ['txid' => $txid, 'payload' => $payload],
+            $this->request('PATCH', "cobv/$txid", $payload)
+        );
+    }
+
     public function obterQrCodeComposto(string $idRec, string $txid): array|string
     {
         return $this->handleResponse(

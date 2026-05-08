@@ -3,6 +3,8 @@
 namespace Lkn\BBPix\App\Pix;
 
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
+use Lkn\BBPix\App\Pix\Exceptions\PixException;
+use Lkn\BBPix\App\Pix\Exceptions\PixExceptionCodes;
 use Lkn\BBPix\Helpers\Logger;
 
 /**
@@ -40,6 +42,10 @@ class PixApiRepository extends AbstractPixApiRepository
 
         Logger::log('Consultar Pix', ['txId' => $taxId], $response);
 
+        if (!($response['success'] ?? false) || !is_array($response['data'])) {
+            throw new PixException(PixExceptionCodes::COULD_NOT_CONSULT_PIX_BY_TXID);
+        }
+
         return $this->getResponseData($response);
     }
 
@@ -64,6 +70,10 @@ class PixApiRepository extends AbstractPixApiRepository
             ],
             $response
         );
+
+        if (!($response['success'] ?? false) || !is_array($response['data'])) {
+            throw new PixException(PixExceptionCodes::COULD_NOT_REQUEST_PIX_REFUND);
+        }
 
         return $this->getResponseData($response);
     }

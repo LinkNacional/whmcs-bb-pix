@@ -5,7 +5,10 @@ namespace Lkn\BBPix\App\Pix\Services;
 use Lkn\BBPix\App\Pix\Entity\PixTaxId;
 use Lkn\BBPix\App\Pix\PixApiRepository;
 use Lkn\BBPix\Helpers\Config;
+use Lkn\BBPix\Helpers\Invoice;
+use Lkn\BBPix\Helpers\Logger;
 use Lkn\BBPix\Helpers\Pix;
+use Throwable;
 
 /**
  * Checks if the latest Pix for this invoice is still active.
@@ -59,9 +62,21 @@ final class InvoiceHasActivePixService
             return false;
         }
 
-        $taxId = PixTaxId::fromWhmcsTransId($latestTransac['transid'], $invoiceId);
+        try {
+            $taxId = PixTaxId::fromWhmcsTransId($latestTransac['transid'], $invoiceId);
+            $consultPixResponse = $this->pixGateway->consultPix($taxId);
+        } catch (Throwable $e) {
+            Logger::log(
+                'InvoiceHasActivePixService: falha ao consultar Pix ativo',
+                [
+                    'invoiceId' => $invoiceId,
+                    'transid' => $latestTransac['transid']
+                ],
+                ['error' => $e->getMessage()]
+            );
 
-        $consultPixResponse = $this->pixGateway->consultPix($taxId);
+            return false;
+        }
 
         if ($consultPixResponse['status'] !== 'ATIVA') {
             return false;
@@ -70,6 +85,15 @@ final class InvoiceHasActivePixService
         $expirationDate = $consultPixResponse['calendario']['expiracao'] ?? '';
         $createdAtDate = $consultPixResponse['calendario']['criacao'] ?? '';
         $cobType = Config::setting('enable_fees_interest') ? 'cobv' : 'cob';
+
+        if ($cobType === 'cobv') {
+            $apiDueDate = $this->normalizeDate((string) ($consultPixResponse['calendario']['dataDeVencimento'] ?? ''));
+            $invoiceDueDate = $this->normalizeDate(Invoice::getDueDate($invoiceId));
+
+            if ($apiDueDate === '' || $apiDueDate !== $invoiceDueDate) {
+                return false;
+            }
+        }
 
         if ($cobType === 'cob' && Pix::isExpired($expirationDate, $createdAtDate)) {
             return false;
@@ -87,5 +111,16 @@ final class InvoiceHasActivePixService
             'pixValue' => $consultPixResponse['valor']['original'],
             'pixCopiaECola' => $consultPixResponse['pixCopiaECola']
         ];
+    }
+
+    private function normalizeDate(string $date): string
+    {
+        $timestamp = strtotime($date);
+
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return date('Y-m-d', $timestamp);
     }
 }
