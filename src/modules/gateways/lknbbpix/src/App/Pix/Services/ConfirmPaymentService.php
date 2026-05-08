@@ -51,119 +51,162 @@ final class ConfirmPaymentService
         }
 
         $transactionId = $this->resolveTransactionId($pixEndToEndId, $apiTxId, $pixTaxId);
+        $lockKey = $this->buildPaymentLockKey($invoiceId, $pixEndToEndId, $transactionId);
+        $lockState = $this->acquirePaymentLock($lockKey, 5);
 
-        if ($this->isInvoiceAlreadyPaid($invoiceId)) {
+        if ($lockState === false) {
             Logger::log(
-                'ConfirmPaymentService: pagamento já processado (fatura paga)',
-                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'apiTxId' => $apiTxId]
+                'ConfirmPaymentService: lock_timeout',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'endToEndId' => $pixEndToEndId],
+                ['lockKey' => $lockKey]
             );
 
             return;
         }
 
-        if ($this->transactionExists($invoiceId, $transactionId)) {
+        if ($lockState === true) {
             Logger::log(
-                'ConfirmPaymentService: pagamento já processado (transação existente)',
-                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'apiTxId' => $apiTxId]
+                'ConfirmPaymentService: lock_acquired',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'endToEndId' => $pixEndToEndId],
+                ['lockKey' => $lockKey]
             );
-
-            return;
-        }
-
-        $invoiceLastTransaction = Invoice::getTransactionByTransactionId($invoiceId, $transactionId);
-        $totalResults = (int) ($invoiceLastTransaction['totalresults'] ?? 0);
-
-        // Para evitar que um mesmo pedido seja pago múltiplas vezes
-        // Com isso a verificação do webhook e do front-end não duplicam o pagamento
-        if ($totalResults > 0) {
-            $this->addNoteToInvoice(
-                $invoiceId,
-                'Pix: validação reconheceu fatura já paga, método de pagamento não permite pagamento parcial'
-            );
-            return;
-        }
-
-        $invoiceBalance = Invoice::getBalance($invoiceId);
-        $invoiceBalance = bcadd($invoiceBalance, '0.005', 2);
-
-        $paidAmount = bcadd($paidAmount, '0.005', 2);
-
-        // TODO Ideal seria verificar taxa de desconto do pedido
-        if ($paidAmount < $invoiceBalance) {
-            $discount = $this->getDiscountValue($paidAmount, $invoiceBalance);
-            $discountService = new DiscountService($invoiceId);
-            $paymentValueWithDiscount = (float) $discountService->calculate();
-            $paymentValueWithDiscount = bcadd($paymentValueWithDiscount, '0.005', 2);
-
-            $discountAmount = $discount['discountAmount'];
-            $discountPercentage = $discount['discountPercentage'];
-
-            $addDiscountResponse = false;
-            // Valida se valor pago com desconto é equivalente
-            // Ao valor recebido via webhook
-            // TODO fazer calculo com números inteiros e não comparar strings
-            // Usar bcmath
-            if ($paymentValueWithDiscount === $paidAmount) {
-                $addDiscountResponse = Invoice::addDiscount(
-                    $invoiceId,
-                    $discountAmount,
-                    "Pix: aplicação de {$discountPercentage}% de desconto"
-                );
-            }
-
-            if (!$addDiscountResponse && $paymentValueWithDiscount === $paidAmount) {
-                $this->addNoteToInvoice(
-                    $invoiceId,
-                    "Pix: erro ao adicionar desconto de R$ {$discountAmount} à fatura"
-                );
-            }
-        }
-
-        // TODO ideal seria verificar se o pagamento teve juros
-        if ($paidAmount > $invoiceBalance) {
-            $tax = $this->getTaxValue($paidAmount, $invoiceBalance);
-            $taxAmount = $tax['taxAmount'] ?? 0;
-            $taxAmountLabel = number_format($taxAmount, 2, ',', '.');
-
-            $addTaxResponse = Invoice::addTax(
-                $invoiceId,
-                $taxAmount,
-                "Pix: aplicação de {$taxAmountLabel} de juros"
-            );
-
-            if (!$addTaxResponse) {
-                $this->addNoteToInvoice(
-                    $invoiceId,
-                    "Pix: erro ao adicionar taxa de R$ {$taxAmountLabel} à fatura"
-                );
-            }
-        }
-
-        if (!function_exists('addInvoicePayment')) {
+        } else {
             Logger::log(
-                'ConfirmPaymentService: addInvoicePayment indisponível',
-                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount],
-                ['critical' => true]
+                'ConfirmPaymentService: lock_unavailable',
+                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'endToEndId' => $pixEndToEndId],
+                ['lockKey' => $lockKey]
             );
-
-            return;
         }
-
-        $this->ensureCreatedTransactionExists($invoiceId, $pixTaxId, $apiTxId);
 
         try {
-            addInvoicePayment($invoiceId, $transactionId, (float) $paidAmount, 0.0, 'lknbbpix');
+            if ($this->isInvoiceAlreadyPaid($invoiceId)) {
+                Logger::log(
+                    'ConfirmPaymentService: duplicate_detected_after_lock (fatura paga)',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'apiTxId' => $apiTxId]
+                );
 
-            Logger::log(
-                'ConfirmPaymentService: baixa aplicada via addInvoicePayment',
-                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount]
-            );
-        } catch (\Throwable $e) {
-            Logger::log(
-                'ConfirmPaymentService: erro ao aplicar baixa via addInvoicePayment',
-                ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount],
-                ['error' => $e->getMessage()]
-            );
+                return;
+            }
+
+            if ($this->transactionExists($invoiceId, $transactionId)) {
+                Logger::log(
+                    'ConfirmPaymentService: duplicate_detected_after_lock (transação existente)',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'apiTxId' => $apiTxId]
+                );
+
+                return;
+            }
+
+            $invoiceLastTransaction = Invoice::getTransactionByTransactionId($invoiceId, $transactionId);
+            $totalResults = (int) ($invoiceLastTransaction['totalresults'] ?? 0);
+
+            // Para evitar que um mesmo pedido seja pago múltiplas vezes
+            // Com isso a verificação do webhook e do front-end não duplicam o pagamento
+            if ($totalResults > 0) {
+                Logger::log(
+                    'ConfirmPaymentService: duplicate_detected_after_lock (transação via GetTransactions)',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'totalResults' => $totalResults]
+                );
+
+                $this->addNoteToInvoice(
+                    $invoiceId,
+                    'Pix: validação reconheceu fatura já paga, método de pagamento não permite pagamento parcial'
+                );
+                return;
+            }
+
+            $invoiceBalance = Invoice::getBalance($invoiceId);
+            $invoiceBalance = bcadd($invoiceBalance, '0.005', 2);
+
+            $paidAmount = bcadd($paidAmount, '0.005', 2);
+
+            // TODO Ideal seria verificar taxa de desconto do pedido
+            if ($paidAmount < $invoiceBalance) {
+                $discount = $this->getDiscountValue($paidAmount, $invoiceBalance);
+                $discountService = new DiscountService($invoiceId);
+                $paymentValueWithDiscount = (float) $discountService->calculate();
+                $paymentValueWithDiscount = bcadd($paymentValueWithDiscount, '0.005', 2);
+
+                $discountAmount = $discount['discountAmount'];
+                $discountPercentage = $discount['discountPercentage'];
+
+                $addDiscountResponse = false;
+                // Valida se valor pago com desconto é equivalente
+                // Ao valor recebido via webhook
+                // TODO fazer calculo com números inteiros e não comparar strings
+                // Usar bcmath
+                if ($paymentValueWithDiscount === $paidAmount) {
+                    $addDiscountResponse = Invoice::addDiscount(
+                        $invoiceId,
+                        $discountAmount,
+                        "Pix: aplicação de {$discountPercentage}% de desconto"
+                    );
+                }
+
+                if (!$addDiscountResponse && $paymentValueWithDiscount === $paidAmount) {
+                    $this->addNoteToInvoice(
+                        $invoiceId,
+                        "Pix: erro ao adicionar desconto de R$ {$discountAmount} à fatura"
+                    );
+                }
+            }
+
+            // TODO ideal seria verificar se o pagamento teve juros
+            if ($paidAmount > $invoiceBalance) {
+                $tax = $this->getTaxValue($paidAmount, $invoiceBalance);
+                $taxAmount = $tax['taxAmount'] ?? 0;
+                $taxAmountLabel = number_format($taxAmount, 2, ',', '.');
+
+                $addTaxResponse = Invoice::addTax(
+                    $invoiceId,
+                    $taxAmount,
+                    "Pix: aplicação de {$taxAmountLabel} de juros"
+                );
+
+                if (!$addTaxResponse) {
+                    $this->addNoteToInvoice(
+                        $invoiceId,
+                        "Pix: erro ao adicionar taxa de R$ {$taxAmountLabel} à fatura"
+                    );
+                }
+            }
+
+            if (!function_exists('addInvoicePayment')) {
+                Logger::log(
+                    'ConfirmPaymentService: addInvoicePayment indisponível',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount],
+                    ['critical' => true]
+                );
+
+                return;
+            }
+
+            $this->ensureCreatedTransactionExists($invoiceId, $pixTaxId, $apiTxId);
+
+            try {
+                addInvoicePayment($invoiceId, $transactionId, (float) $paidAmount, 0.0, 'lknbbpix');
+
+                Logger::log(
+                    'ConfirmPaymentService: baixa aplicada via addInvoicePayment',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount]
+                );
+            } catch (\Throwable $e) {
+                Logger::log(
+                    'ConfirmPaymentService: erro ao aplicar baixa via addInvoicePayment',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'paidAmount' => $paidAmount],
+                    ['error' => $e->getMessage()]
+                );
+            }
+        } finally {
+            if ($lockState === true) {
+                $released = $this->releasePaymentLock($lockKey);
+
+                Logger::log(
+                    'ConfirmPaymentService: lock_released',
+                    ['invoiceId' => $invoiceId, 'transactionId' => $transactionId, 'endToEndId' => $pixEndToEndId],
+                    ['lockKey' => $lockKey, 'released' => $released]
+                );
+            }
         }
     }
 
@@ -211,6 +254,85 @@ final class ConfirmPaymentService
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    private function buildPaymentLockKey(int $invoiceId, string $pixEndToEndId, string $transactionId): string
+    {
+        $normalizedEndToEndId = strtoupper(trim($pixEndToEndId));
+        $normalizedTransactionId = strtoupper(trim($transactionId));
+
+        $baseKey = $normalizedEndToEndId !== ''
+            ? $normalizedEndToEndId
+            : ($normalizedTransactionId !== '' ? $normalizedTransactionId : (string) $invoiceId);
+
+        $key = 'lknbbpix:confirm:' . $invoiceId . ':' . $baseKey;
+
+        // GET_LOCK aceita até 64 caracteres.
+        if (strlen($key) > 64) {
+            return substr($key, 0, 32) . md5($key);
+        }
+
+        return $key;
+    }
+
+    /**
+     * @return bool|null true=lock adquirido, false=timeout, null=indisponível
+     */
+    private function acquirePaymentLock(string $lockKey, int $timeoutSeconds): ?bool
+    {
+        try {
+            $result = Capsule::selectOne('SELECT GET_LOCK(?, ?) AS lock_result', [$lockKey, $timeoutSeconds]);
+            $value = $this->extractScalarValue($result, 'lock_result');
+
+            if ($value === 1) {
+                return true;
+            }
+
+            if ($value === 0) {
+                return false;
+            }
+
+            return null;
+        } catch (\Throwable $e) {
+            Logger::log(
+                'ConfirmPaymentService: lock_acquire_error',
+                ['lockKey' => $lockKey],
+                ['error' => $e->getMessage()]
+            );
+
+            return null;
+        }
+    }
+
+    private function releasePaymentLock(string $lockKey): bool
+    {
+        try {
+            $result = Capsule::selectOne('SELECT RELEASE_LOCK(?) AS lock_result', [$lockKey]);
+            $value = $this->extractScalarValue($result, 'lock_result');
+
+            return $value === 1;
+        } catch (\Throwable $e) {
+            Logger::log(
+                'ConfirmPaymentService: lock_release_error',
+                ['lockKey' => $lockKey],
+                ['error' => $e->getMessage()]
+            );
+
+            return false;
+        }
+    }
+
+    private function extractScalarValue(mixed $result, string $field): int
+    {
+        if (is_object($result) && isset($result->{$field})) {
+            return (int) $result->{$field};
+        }
+
+        if (is_array($result) && isset($result[$field])) {
+            return (int) $result[$field];
+        }
+
+        return -1;
     }
 
     private function getDiscountValue(
