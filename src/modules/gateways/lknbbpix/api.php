@@ -11,6 +11,7 @@ use Lkn\BBPix\App\Pix\Controllers\ApiController;
 use Lkn\BBPix\App\Pix\Controllers\DiscountController;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\PixController;
+use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\App\Pix\Services\DecisionService;
 use Lkn\BBPix\App\Pix\Services\DiscountService;
 use Lkn\BBPix\App\Pix\Services\LoadJourney4PixService;
@@ -54,6 +55,32 @@ $isWebhookNotRegisteredError = static function (array $result): bool {
         str_contains($detail, 'Não há webhook cadastrado') ||
         str_contains($detail, 'Nao ha webhook cadastrado')
     );
+};
+
+$isRecAlreadyCancelledError = static function (array $result): bool {
+    if (($result['success'] ?? false) === true) {
+        return false;
+    }
+
+    $type = strtolower((string) ($result['data']['type'] ?? ''));
+    $title = strtolower((string) ($result['data']['title'] ?? ''));
+    $detail = strtolower((string) ($result['data']['detail'] ?? ''));
+    $combined = $type . ' ' . $title . ' ' . $detail;
+
+    return str_contains($combined, 'cancelad') || str_contains($combined, 'revogad');
+};
+
+$isValidAdminCsrfToken = static function (object $request): bool {
+    $requestToken = (string) (
+        $request->csrfToken
+        ?? $request->token
+        ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')
+    );
+    $sessionToken = (string) ($_SESSION['lkn-bb-pix-admin'] ?? '');
+
+    return $requestToken !== ''
+        && $sessionToken !== ''
+        && hash_equals($sessionToken, $requestToken);
 };
 
 switch ($request->action) {
@@ -105,6 +132,133 @@ switch ($request->action) {
 
         http_response_code(200);
         (new DiscountController())->delete($request->productId);
+
+        break;
+
+    case 'cancel-auto-auth':
+        if (!Auth::isAdminLogged(['Configure Payment Gateways'])) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado.']);
+        }
+
+        if (!$isValidAdminCsrfToken($request)) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Token CSRF inválido.']);
+        }
+
+        $idRec = strtoupper(trim((string) ($request->idRec ?? '')));
+        $clientId = (int) ($request->clientId ?? 0);
+
+        if ($idRec === '' || !preg_match('/^[A-Z0-9]{1,35}$/', $idRec)) {
+            http_response_code(422);
+            Response::api(false, ['error' => 'idRec inválido.']);
+        }
+
+        try {
+            $authRow = Capsule::table('mod_lknbbpix_auths')
+                ->where('id_rec', $idRec)
+                ->first(['client_id', 'id_rec', 'status']);
+
+            if (!$authRow) {
+                http_response_code(404);
+                Response::api(false, ['error' => 'Autorização não encontrada.']);
+            }
+
+            if ($clientId > 0 && (int) $authRow->client_id !== $clientId) {
+                http_response_code(403);
+                Response::api(false, ['error' => 'Autorização não pertence ao cliente informado.']);
+            }
+
+            $currentStatus = strtoupper(trim((string) ($authRow->status ?? '')));
+
+            if (in_array($currentStatus, ['CANCELADA', 'REVOGADA', 'REJEITADA'], true)) {
+                http_response_code(200);
+                Response::api(true, [
+                    'idRec' => $idRec,
+                    'status' => $currentStatus,
+                    'message' => 'Autorização já estava finalizada.',
+                ]);
+            }
+
+            if (!in_array($currentStatus, ['CRIADA', 'APROVADA'], true)) {
+                http_response_code(409);
+                Response::api(false, ['error' => 'Status atual não permite cancelamento manual.']);
+            }
+
+            $bbCancelResponse = (new PixAutoRepository())->cancelarRecorrencia($idRec);
+            $bbSuccess = (bool) ($bbCancelResponse['success'] ?? false);
+
+            if (!$bbSuccess && !$isRecAlreadyCancelledError($bbCancelResponse)) {
+                Logger::log(
+                    'Cancelar autorização Pix Automático no admin',
+                    [
+                        'action' => 'cancel-auto-auth',
+                        'idRec' => $idRec,
+                        'clientId' => (int) $authRow->client_id,
+                        'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                        'currentStatus' => $currentStatus,
+                    ],
+                    ['bbResponse' => $bbCancelResponse]
+                );
+
+                http_response_code(502);
+                Response::api(false, ['error' => 'Banco do Brasil recusou o cancelamento da autorização.']);
+            }
+
+            $updateResponse = (new AuthRepository())->atualizarStatusPorIdRec($idRec, 'CANCELADA');
+
+            if (!($updateResponse['success'] ?? false)) {
+                Logger::log(
+                    'Falha ao persistir cancelamento de autorização Pix Automático',
+                    [
+                        'action' => 'cancel-auto-auth',
+                        'idRec' => $idRec,
+                        'clientId' => (int) $authRow->client_id,
+                        'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                        'currentStatus' => $currentStatus,
+                    ],
+                    ['updateResponse' => $updateResponse, 'bbResponse' => $bbCancelResponse]
+                );
+
+                http_response_code(500);
+                Response::api(false, ['error' => 'Falha ao atualizar status local da autorização.']);
+            }
+
+            Logger::log(
+                'Autorização Pix Automático cancelada no admin',
+                [
+                    'action' => 'cancel-auto-auth',
+                    'idRec' => $idRec,
+                    'clientId' => (int) $authRow->client_id,
+                    'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                    'fromStatus' => $currentStatus,
+                    'toStatus' => 'CANCELADA',
+                ],
+                ['bbResponse' => $bbCancelResponse, 'updateResponse' => $updateResponse]
+            );
+
+            http_response_code(200);
+            Response::api(true, [
+                'idRec' => $idRec,
+                'status' => 'CANCELADA',
+                'message' => 'Autorização cancelada com sucesso.',
+                'requiresRefresh' => false,
+            ]);
+        } catch (Throwable $e) {
+            Logger::log(
+                'Falha no cancelamento de autorização Pix Automático no admin',
+                [
+                    'action' => 'cancel-auto-auth',
+                    'idRec' => $idRec,
+                    'clientId' => $clientId,
+                    'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                ],
+                ['error' => $e->getMessage(), 'exception' => get_class($e)]
+            );
+
+            http_response_code(500);
+            Response::api(false, ['error' => 'Erro interno ao cancelar autorização.']);
+        }
 
         break;
 

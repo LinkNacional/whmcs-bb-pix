@@ -21,6 +21,7 @@ abstract class Response
             self::response($success, $data),
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         );
+        exit;
     }
 
     final public static function return(bool $success, array $data = []): array|string

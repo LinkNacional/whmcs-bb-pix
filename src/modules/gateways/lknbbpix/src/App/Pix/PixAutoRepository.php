@@ -61,6 +61,32 @@ class PixAutoRepository extends AbstractPixApiRepository
         );
     }
 
+    public function cancelarRecorrencia(string $idRec): array|string
+    {
+        try {
+            $payload = ['status' => 'CANCELADA'];
+
+            return $this->handleResponse(
+                'Cancelar recorrência Pix Automático',
+                ['idRec' => $idRec, 'payload' => $payload],
+                $this->requestWithScopes(
+                    'rec.write',
+                    'PATCH',
+                    "rec/$idRec",
+                    $payload
+                )
+            );
+        } catch (Throwable $th) {
+            Logger::log(
+                'Falha ao cancelar recorrência Pix Automático',
+                ['idRec' => $idRec],
+                ['error' => $th->getMessage()]
+            );
+
+            return Response::return(false, ['reason' => $th->getMessage()]);
+        }
+    }
+
     public function registrarWebhookRec(?string $webhookUrl = null): array|string
     {
         try {
