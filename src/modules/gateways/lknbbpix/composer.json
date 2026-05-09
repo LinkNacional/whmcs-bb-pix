@@ -1,8 +1,8 @@
 {
     "name": "linknacional/whmcsbbpix",
-    "version": "1.0.0",
+    "version": "2.3.1",
     "type": "project",
-    "license": "proprietary",
+    "license": "GPL",
     "description": "Para pagamentos por Pix pela API do Banco do Brasil",
     "minimum-stability": "stable",
     "prefer-stable": true,
