@@ -2,7 +2,7 @@
 
 return [
     'name' => 'lknbbpix',
-    'version' => '2.2.0',
+    'version' => '2.3.1',
     'resources_path' => realpath(__DIR__ . '/../resources/config_header.tpl'),
 
     'public_key_path' => realpath(__DIR__ . '/../certs/public.key'),

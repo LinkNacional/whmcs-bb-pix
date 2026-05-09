@@ -175,6 +175,49 @@ class AuthRepository extends AbstractDbRepository
         }
     }
 
+    public function findCreatedOlderThanHours(int $hours = 24, int $limit = 50): array
+    {
+        try {
+            $threshold = date('Y-m-d H:i:s', strtotime("-{$hours} hours"));
+
+            $auths = $this->query()
+                ->where('status', 'CRIADA')
+                ->where('created_at', '<=', $threshold)
+                ->orderBy('created_at', 'asc')
+                ->limit($limit)
+                ->get();
+
+            return Response::return(true, ['auths' => $auths]);
+        } catch (Throwable $th) {
+            Logger::log(
+                'Erro ao consultar autorizações CRIADA vencidas',
+                ['hours' => $hours, 'limit' => $limit],
+                ['error' => $th->getMessage()]
+            );
+
+            return Response::return(false, ['reason' => $th->getMessage()]);
+        }
+    }
+
+    public function touchUpdatedAtByIdRec(string $idRec): array
+    {
+        try {
+            $affectedRows = $this->query()
+                ->where('id_rec', $idRec)
+                ->update(['updated_at' => date('Y-m-d H:i:s')]);
+
+            return Response::return(true, ['affectedRows' => $affectedRows]);
+        } catch (Throwable $th) {
+            Logger::log(
+                'Erro ao atualizar updated_at da autorização Pix Automático',
+                ['id_rec' => $idRec],
+                ['error' => $th->getMessage()]
+            );
+
+            return Response::return(false, ['reason' => $th->getMessage()]);
+        }
+    }
+
     private function hasEmvAmountSnapshotColumn(): bool
     {
         if ($this->hasEmvAmountSnapshotColumn === null) {
