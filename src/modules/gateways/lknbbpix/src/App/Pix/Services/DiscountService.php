@@ -5,7 +5,9 @@ namespace Lkn\BBPix\App\Pix\Services;
 use Lkn\BBPix\App\Pix\Repositories\DiscountRepository;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Invoice;
+use Lkn\BBPix\Helpers\InvoiceOriginHelper;
 use Lkn\BBPix\Helpers\Logger;
+use Throwable;
 use WHMCS\Database\Capsule;
 
 /**
@@ -22,8 +24,10 @@ final class DiscountService
     private readonly ?int $orderId;
     private readonly float $invoiceBalance;
     private readonly array $invoiceItemsWithProductsIds;
+    private readonly string $flowDecision;
+    private readonly string $callOrigin;
 
-    public function __construct(int $invoiceId)
+    public function __construct(int $invoiceId, ?string $flowDecision = null, string $callOrigin = 'unknown')
     {
         $this->invoiceId = $invoiceId;
         $this->clientId = Invoice::getClientId($this->invoiceId);
@@ -35,6 +39,8 @@ final class DiscountService
             ->first('id')
             ->id);
 
+        $this->flowDecision = $flowDecision ?? $this->resolveFlowDecision();
+        $this->callOrigin = $callOrigin;
         $this->invoiceItemsWithProductsIds = $this->getInvoiceItemsProductsIds([]);
     }
 
@@ -102,6 +108,9 @@ final class DiscountService
         Logger::log(
             'Calcular desconto por pagamento via Pix',
             [
+                'invoiceId' => $this->invoiceId,
+                'flowDecision' => $this->flowDecision,
+                'callOrigin' => $this->callOrigin,
                 'discountForPixPayment' => $discountForPixPayment,
                 'ruledDiscountCriteria' => $ruledDiscountCriteria,
                 'ruledDiscount' => ($ruledDiscount ?? null),
@@ -130,6 +139,7 @@ final class DiscountService
     private function calculateInvoiceDiscountBasedOnProductsDiscounts(): string
     {
         $invoiceValueWithDiscount = 0.0;
+        $log = [];
 
         foreach ($this->invoiceItemsWithProductsIds as $item) {
             $productValue = (float) ($item['amount']);
@@ -178,7 +188,7 @@ final class DiscountService
                     if (!isset($item['product_id'])) {
                         $invoiceValueWithDiscount += $productValue;
 
-                        continue;
+                        continue 2;
                     }
 
                     $response = $this->discountRepository->getPercentageForProductId($item['product_id']);
@@ -202,7 +212,12 @@ final class DiscountService
 
         Logger::log(
             'Calcular desconto por produto',
-            $log,
+            [
+                'invoiceId' => $this->invoiceId,
+                'flowDecision' => $this->flowDecision,
+                'callOrigin' => $this->callOrigin,
+                'items' => $log,
+            ],
             [
                 'invoiceValueWithDiscount' => $invoiceValueWithDiscount,
                 'invoiceBalance' => $this->invoiceBalance
@@ -254,6 +269,27 @@ final class DiscountService
      *               )
      *               Some items may not have a product_id since it must be a manually-added product or a taxe.
      */
+    private function resolveFlowDecision(): string
+    {
+        try {
+            $invoiceOrigin = (new InvoiceOriginHelper())->classify($this->invoiceId);
+
+            if ($invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL) {
+                return DecisionService::MANUAL_TRADICIONAL;
+            }
+
+            $dueDate = (string) (Capsule::table('tblinvoices')
+                ->where('id', $this->invoiceId)
+                ->value('duedate') ?? date('Y-m-d'));
+
+            $dueDay = (int) date('d', strtotime($dueDate));
+
+            return (new DecisionService())->evaluate($invoiceOrigin, $this->clientId, $dueDay, $this->invoiceId);
+        } catch (Throwable) {
+            return 'unknown';
+        }
+    }
+
     private function getInvoiceItemsProductsIds(): array
     {
         $invoiceItems = localAPI('GetInvoice', ['invoiceid' => $this->invoiceId])['items']['item'];

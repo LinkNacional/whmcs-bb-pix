@@ -510,7 +510,7 @@ switch ($request->action) {
             }
 
             $invoiceValue = (float) ($invoiceApiData['balance'] ?? 0.0);
-            $pixValue = (float) (new DiscountService($invoiceId))->calculate();
+            $pixValue = (float) (new DiscountService($invoiceId, $decision, 'api_load_journey4_qrcode'))->calculate();
             $discountPercentage = null;
             $taxAmount = null;
 

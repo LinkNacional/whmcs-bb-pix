@@ -67,7 +67,7 @@ final class CreatePixServiceLate extends CreatePixService
      */
     private function buildRequestBody(array $request): array
     {
-        $discountService = new DiscountService($request['invoiceId']);
+        $discountService = new DiscountService($request['invoiceId'], null, 'create_pix_service_late');
         $dueDate = Invoice::getDueDate($request['invoiceId']);
 
         $paymentValueWithDiscount = $discountService->calculate();

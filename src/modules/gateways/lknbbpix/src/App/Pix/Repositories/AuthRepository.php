@@ -175,7 +175,7 @@ class AuthRepository extends AbstractDbRepository
         }
     }
 
-    public function findCreatedOlderThanHours(int $hours = 24, int $limit = 50): array
+    public function findCreatedOlderThanHours(int $hours = 12, int $limit = 50): array
     {
         try {
             $threshold = date('Y-m-d H:i:s', strtotime("-{$hours} hours"));
@@ -187,7 +187,7 @@ class AuthRepository extends AbstractDbRepository
                 ->limit($limit)
                 ->get();
 
-            return Response::return(true, ['auths' => $auths]);
+            return Response::return(true, ['auths' => $auths->all()]);
         } catch (Throwable $th) {
             Logger::log(
                 'Erro ao consultar autorizações CRIADA vencidas',

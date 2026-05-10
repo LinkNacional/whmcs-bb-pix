@@ -99,7 +99,7 @@ final class InvoiceHasActivePixService
             return false;
         }
 
-        $discountService = new DiscountService($invoiceId);
+        $discountService = new DiscountService($invoiceId, null, 'invoice_has_active_pix_service');
         $paymentValueWithDiscount = $discountService->calculate();
 
         if ($consultPixResponse['valor']['original'] !== $paymentValueWithDiscount) {
