@@ -2,6 +2,7 @@
 
 namespace Lkn\BBPix\Tests\Unit\App\Pix\Services;
 
+use Lkn\BBPix\App\Pix\Exceptions\Journey4PublicException;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\App\Pix\Services\LoadJourney4PixService;
@@ -280,5 +281,67 @@ final class LoadJourney4PixServiceTest extends TestCase
         $this->expectExceptionMessage('Fatura vencida não pode seguir na Jornada 4. Utilize o fluxo manual.');
 
         $service->run(2004, 106, 10, 'LKN0000002004ABCDE1234567', self::PAYER_DATA);
+    }
+
+    public function testRunThrowsPublicValidationMessageWhenBbReturnsValidationDetail(): void
+    {
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->expects(self::once())
+            ->method('findCreatedByClientAndDueDay')
+            ->willReturn([
+                'success' => true,
+                'data' => ['auth' => null],
+            ]);
+
+        $pixRepo->expects(self::once())
+            ->method('criarCobV')
+            ->willReturn([
+                'success' => false,
+                'data' => [
+                    'statusCode' => 400,
+                    'detail' => 'Número CPF ou CNPJ do Devedor não ativo na Receita Federal. (200-000) '
+                ]
+            ]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(Journey4PublicException::class);
+        $this->expectExceptionMessage(
+            'Erro ao gerar o PIX, motivo: Número CPF ou CNPJ do Devedor não ativo na Receita Federal. (200-000)'
+        );
+
+        $service->run(2005, 107, 10, 'LKN0000002005ABCDE1234567', self::PAYER_DATA);
+    }
+
+    public function testRunThrowsGenericPublicMessageWhenErrorIsNotValidation(): void
+    {
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->expects(self::once())
+            ->method('findCreatedByClientAndDueDay')
+            ->willReturn([
+                'success' => true,
+                'data' => ['auth' => null],
+            ]);
+
+        $pixRepo->expects(self::once())
+            ->method('criarCobV')
+            ->willReturn([
+                'success' => false,
+                'data' => [
+                    'statusCode' => 503,
+                    'detail' => 'Serviço indisponível'
+                ]
+            ]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(Journey4PublicException::class);
+        $this->expectExceptionMessage('Erro interno ao gerar proposta do Pix Automático.');
+
+        $service->run(2006, 108, 10, 'LKN0000002006ABCDE1234567', self::PAYER_DATA);
     }
 }

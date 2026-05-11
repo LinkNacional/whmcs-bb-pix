@@ -9,6 +9,7 @@
 
 use Lkn\BBPix\App\Pix\Controllers\ApiController;
 use Lkn\BBPix\App\Pix\Controllers\DiscountController;
+use Lkn\BBPix\App\Pix\Exceptions\Journey4PublicException;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\PixController;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
@@ -537,6 +538,19 @@ switch ($request->action) {
                 'discountPercentage' => $discountPercentage,
                 'taxAmount' => $taxAmount,
             ]);
+        } catch (Journey4PublicException $e) {
+            Logger::log(
+                'Erro de validação ao carregar Jornada 4 via API',
+                [
+                    'invoiceId' => $invoiceId,
+                    'step' => $e->getStep(),
+                    'statusCode' => $e->getStatusCode(),
+                ],
+                ['error' => $e->getMessage()]
+            );
+
+            http_response_code($e->getStatusCode());
+            Response::api(false, ['error' => $e->getMessage()]);
         } catch (Throwable $e) {
             Logger::log(
                 'Erro ao carregar Jornada 4 via API',
