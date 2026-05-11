@@ -158,9 +158,6 @@ final class LoadJourney4PixService
                 'dataInicial'   => $dataInicial,
                 'periodicidade' => 'MENSAL',
             ],
-            'valor' => [
-                'valorRec' => number_format((float) $amount, 2, '.', ''),
-            ],
             'loc' => (int) $locationId,
             'politicaRetentativa' => 'NAO_PERMITE',
         ];

@@ -129,7 +129,7 @@ final class LoadJourney4PixServiceTest extends TestCase
                     && isset($payload['vinculo']['devedor']['cnpj'])
                     && isset($payload['calendario']['dataInicial'])
                     && isset($payload['calendario']['periodicidade'])
-                    && isset($payload['valor']['valorRec'])
+                    && !isset($payload['valor'])
                     && isset($payload['loc'])
                     && isset($payload['politicaRetentativa'])
                     && isset($payload['recebedor']['convenio'])
@@ -137,7 +137,6 @@ final class LoadJourney4PixServiceTest extends TestCase
                     && $payload['vinculo']['devedor']['nome'] === self::PAYER_DATA['clientFullName']
                     && $payload['vinculo']['devedor']['cnpj'] === self::PAYER_DATA['payerDocValue']
                     && $payload['calendario']['periodicidade'] === 'MENSAL'
-                    && $payload['valor']['valorRec'] === '100.00'
                     && $payload['loc'] === 123
                     && $payload['politicaRetentativa'] === 'NAO_PERMITE'
                     && $payload['recebedor']['convenio'] === '34627';
