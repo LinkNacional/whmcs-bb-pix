@@ -77,4 +77,9 @@ class PixApiRepository extends AbstractPixApiRepository
 
         return $this->getResponseData($response);
     }
+
+    public function consultPixByEndToEndId(string $e2eid): array
+    {
+        return $this->consultPixByEndToEndIdBase($e2eid);
+    }
 }

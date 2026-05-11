@@ -212,7 +212,7 @@ final class ConfirmPaymentService
 
     private function resolveTransactionId(string $pixEndToEndId, string $apiTxId, ?PixTaxId $pixTaxId): string
     {
-        $normalizedEndToEndId = strtoupper(trim($pixEndToEndId));
+        $normalizedEndToEndId = trim($pixEndToEndId);
 
         if ($pixTaxId instanceof PixTaxId && $pixTaxId->suffix !== '') {
             $transactionId = 'PAGOx' . $pixTaxId->suffix;

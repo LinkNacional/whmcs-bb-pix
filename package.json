@@ -4,15 +4,15 @@
   "description": "This repository provides a development environment for WHMCS or WordPress",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/srbrunoferreira/docker-php-dev-container.git"
+    "url": "git+https://github.com/linknacional/docker-php-dev-container.git"
   },
   "keywords": ["WordPress", "WHMCS", "plugin", "Dev Container", "VS Code"],
-  "author": "Bruno Ferreira <srbrunoferreira@outlook.com>",
+  "author": "Link Nacional <contato@linknacional.com.br>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/srbrunoferreira/docker-php-dev-container/issues"
+    "url": "https://github.com/linknacional/docker-php-dev-container/issues"
   },
-  "homepage": "https://github.com/srbrunoferreira/docker-php-dev-container#readme",
+  "homepage": "https://github.com/linknacional/docker-php-dev-container#readme",
   "devDependencies": {
     "eslint": "^8.34.0",
     "eslint-config-airbnb-base": "^15.0.0",
