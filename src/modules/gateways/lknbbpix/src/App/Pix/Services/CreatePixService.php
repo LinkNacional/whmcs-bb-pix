@@ -64,7 +64,7 @@ class CreatePixService
      */
     private function buildRequestBody(array $request): array
     {
-        $discountService = new DiscountService($request['invoiceId']);
+        $discountService = new DiscountService($request['invoiceId'], null, 'create_pix_service');
 
         $paymentValueWithDiscount = $discountService->calculate();
 

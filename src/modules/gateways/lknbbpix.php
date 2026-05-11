@@ -585,7 +585,7 @@ function lknbbpix_link($params): string
         $payerDocValue = $payerResolution['data']['payerDocValue'];
 
         if ($flowDecision === DecisionService::JORNADA4) {
-            $pixValue = (float) (new DiscountService((int) $invoiceId))->calculate();
+            $pixValue = (float) (new DiscountService((int) $invoiceId, $flowDecision, 'lknbbpix_link'))->calculate();
             $discountPercentage = null;
             $taxAmount = null;
 

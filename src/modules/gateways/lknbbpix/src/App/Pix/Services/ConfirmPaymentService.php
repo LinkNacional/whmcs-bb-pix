@@ -123,7 +123,7 @@ final class ConfirmPaymentService
             // TODO Ideal seria verificar taxa de desconto do pedido
             if ($paidAmount < $invoiceBalance) {
                 $discount = $this->getDiscountValue($paidAmount, $invoiceBalance);
-                $discountService = new DiscountService($invoiceId);
+                $discountService = new DiscountService($invoiceId, null, 'confirm_payment_service');
                 $paymentValueWithDiscount = (float) $discountService->calculate();
                 $paymentValueWithDiscount = bcadd($paymentValueWithDiscount, '0.005', 2);
 
