@@ -26,7 +26,7 @@ final class InvoiceFlowDecisionMappingTest extends TestCase
                 ],
             ]);
 
-        $decision = (new DecisionService($authRepository))->evaluate($origin, 55, 12);
+        $decision = (new DecisionService($authRepository))->evaluate($origin, 55, 12, '2099-12-31');
 
         self::assertSame($expectedDecision, $decision);
     }

@@ -446,6 +446,7 @@ switch ($request->action) {
 
         try {
             $clientId = (int) $invoice->userid;
+            $dueDate = date('Y-m-d', strtotime((string) $invoice->duedate));
             $dueDay = (int) date('d', strtotime((string) $invoice->duedate));
 
             if (!Config::setting('enable_pix_automatic')) {
@@ -457,7 +458,7 @@ switch ($request->action) {
 
             $decision = $invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL
                 ? DecisionService::MANUAL_TRADICIONAL
-                : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay);
+                : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $dueDate);
 
             if ($decision !== DecisionService::JORNADA4) {
                 http_response_code(409);

@@ -29,6 +29,10 @@ final class LoadJourney4PixService
         $amount = $this->normalizeAmount(Invoice::getBalance($invoiceId));
         $dueDate = $this->normalizeDueDate(Invoice::getDueDate($invoiceId));
 
+        if ($dueDate !== '' && $this->isDateBeforeToday($dueDate)) {
+            throw new RuntimeException('Fatura vencida não pode seguir na Jornada 4. Utilize o fluxo manual.');
+        }
+
         $cached = $this->authRepository->findCreatedByClientAndDueDay($clientId, $dueDay);
 
         if (($cached['success'] ?? false) && !empty($cached['data']['auth'])) {
@@ -213,6 +217,18 @@ final class LoadJourney4PixService
         }
 
         return date('Y-m-d', $timestamp);
+    }
+
+    private function isDateBeforeToday(string $date): bool
+    {
+        $dateObj = \DateTimeImmutable::createFromFormat('Y-m-d', $date);
+        $todayObj = new \DateTimeImmutable('today');
+
+        if ($dateObj === false) {
+            return false;
+        }
+
+        return $dateObj < $todayObj;
     }
 
     private function isCachedSnapshotValid(

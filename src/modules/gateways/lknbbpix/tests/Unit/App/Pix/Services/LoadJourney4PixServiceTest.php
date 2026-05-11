@@ -15,6 +15,13 @@ final class LoadJourney4PixServiceTest extends TestCase
         'payerDocValue' => '28552001000168',
     ];
 
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['lknbbpix_test_invoices'][2004]);
+
+        parent::tearDown();
+    }
+
     public function testRunReturnsCachedEmvWhenCreatedAuthorizationAlreadyHasPayload(): void
     {
         $pixRepo = $this->createMock(PixAutoRepository::class);
@@ -250,5 +257,28 @@ final class LoadJourney4PixServiceTest extends TestCase
         self::assertSame('REC_NEW_005', $response['data']['idRec']);
 
         $GLOBALS['lknbbpix_gateway_variables']['recurrence_object_name'] = 'Fatura WHMCS';
+    }
+
+    public function testRunThrowsWhenInvoiceDueDateIsOverdueBeforeCallingCobv(): void
+    {
+        $GLOBALS['lknbbpix_test_invoices'][2004] = [
+            'balance' => '100.00',
+            'duedate' => date('Y-m-d', strtotime('-1 day')),
+            'total' => '100.00',
+            'notes' => ''
+        ];
+
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $pixRepo->expects(self::never())->method('criarCobV');
+        $authRepo->expects(self::never())->method('findCreatedByClientAndDueDay');
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Fatura vencida não pode seguir na Jornada 4. Utilize o fluxo manual.');
+
+        $service->run(2004, 106, 10, 'LKN0000002004ABCDE1234567', self::PAYER_DATA);
     }
 }
