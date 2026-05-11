@@ -43,7 +43,7 @@ O modulo permite receber pagamentos via Pix diretamente nas faturas do WHMCS, co
 ## Requisitos
 ### Plataforma
 - WHMCS 8.6 ou superior.
-- PHP 8.1 ou superior (recomendado utilizar versao suportada mais recente do seu ambiente).
+- PHP 8.3 ou superior.
 
 ### Extensoes PHP
 - GD
@@ -64,6 +64,7 @@ Arquivos principais do modulo:
 - src/modules/gateways/lknbbpix/webhookrec.php
 - src/modules/gateways/lknbbpix/webhookcobr.php
 - src/includes/hooks/lknbbpix.php
+- src/includes/hooks/lknbbpix_admin.php
 
 ## Instalacao
 ### 1. Backup (obrigatorio)
@@ -273,10 +274,10 @@ Cada webhook registra:
 
 Checklist apos ativar em producao:
 
-1. Tabela de webhooks mostra status "Registrado" (verde) para webhook e webhookcobr.
+1. Tabela de webhooks mostra status "Registrado" (verde) para webhookrec e webhookcobr.
 2. Pelo menos um pagamento de teste foi confirmado automaticamente (webhook.php).
 3. Um teste de autorizacao recorrente foi aprovado e status em `mod_lknbbpix_auths` mudou para APROVADA.
-4. Uma cobranca recorrente foi dispara e resultado foi recebido em `webhookcobr.php` (CONCLUIDA ou REJEITADA).
+4. Uma cobranca recorrente foi disparada e resultado foi recebido em `webhookcobr.php` (CONCLUIDA ou REJEITADA).
 5. Logs nao mostram erros de conexao ou payloads invalidos.
 
 ### Troubleshooting - Webhook nao funcionando
@@ -324,6 +325,7 @@ Se o webhook nao esta funcionando:
 	- src/modules/gateways/lknbbpix.php
 	- src/modules/gateways/lknbbpix/
 	- src/includes/hooks/lknbbpix.php
+   - src/includes/hooks/lknbbpix_admin.php
 
 ### Remocao de dados
 O modulo pode ter criado tabelas proprias para configuracoes/regras. Avalie com cuidado antes de excluir dados historicos. Em producao, recomenda-se manter dados para auditoria.

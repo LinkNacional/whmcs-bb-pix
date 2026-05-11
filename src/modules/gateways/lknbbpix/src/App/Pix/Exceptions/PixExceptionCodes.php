@@ -17,6 +17,7 @@ enum PixExceptionCodes
     case INVALID_CPF;
     case INVALID_CNPJ;
     case INVALID_DUE_DATE;
+    case PIX_INELIGIBLE_FOR_REFUND;
 
     public function label(): string
     {
@@ -28,12 +29,13 @@ enum PixExceptionCodes
             PixExceptionCodes::COULD_NOT_CONSULT_PIX_BY_TXID => 'Não foi possível consultar o Pix.',
             PixExceptionCodes::COULD_NOT_CREATE_PIX_BY_TXID => 'Não foi possível criar o Pix.',
             PixExceptionCodes::COULD_NOT_REQUEST_PIX_REFUND => 'Não foi possível solicitar a devolução do Pix.',
-            PixExceptionCodes::COULD_NOT_CREATE_PIX_BY_TXID => 'Não foi possível se autenticar.',
+            PixExceptionCodes::COULD_NOT_CREATE_ACCESS_TOKEN => 'Não foi possível se autenticar.',
             PixExceptionCodes::FOUND_PRODUCTS_WITH_SAME_SAMES_WHEN_CALC_DISCOUNTS => 'Produtos com os mesmos dados foram encontrados. Não é possível gerar o Pix para essa fatura.',
             PixExceptionCodes::FOUND_PRODUCTS_GROUPS_WITH_SAME_SAMES_WHEN_CALC_DISCOUNTS => 'Grupos de produtos com os mesmos dados foram encontrados. Não é possível gerar o Pix para essa fatura.',
             PixExceptionCodes::INVALID_CPF => 'CPF inválido.',
             PixExceptionCodes::INVALID_CNPJ => 'CNPJ inválido.',
             PixExceptionCodes::INVALID_DUE_DATE => 'Não foi possível gerar o PIX, fatura está vencida entre em contato com o financeiro',
+            PixExceptionCodes::PIX_INELIGIBLE_FOR_REFUND => 'A transação não pôde ser validada como elegível para devolução automática. Verifique com o banco ou tente novamente mais tarde.',
             default => 'Erro não identificado.'
         };
     }

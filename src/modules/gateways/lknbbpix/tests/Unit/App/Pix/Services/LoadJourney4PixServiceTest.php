@@ -2,6 +2,7 @@
 
 namespace Lkn\BBPix\Tests\Unit\App\Pix\Services;
 
+use Lkn\BBPix\App\Pix\Exceptions\Journey4PublicException;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\App\Pix\Services\LoadJourney4PixService;
@@ -14,6 +15,13 @@ final class LoadJourney4PixServiceTest extends TestCase
         'payerDocType' => 'cnpj',
         'payerDocValue' => '28552001000168',
     ];
+
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['lknbbpix_test_invoices'][2004]);
+
+        parent::tearDown();
+    }
 
     public function testRunReturnsCachedEmvWhenCreatedAuthorizationAlreadyHasPayload(): void
     {
@@ -121,7 +129,7 @@ final class LoadJourney4PixServiceTest extends TestCase
                     && isset($payload['vinculo']['devedor']['cnpj'])
                     && isset($payload['calendario']['dataInicial'])
                     && isset($payload['calendario']['periodicidade'])
-                    && isset($payload['valor']['valorRec'])
+                    && !isset($payload['valor'])
                     && isset($payload['loc'])
                     && isset($payload['politicaRetentativa'])
                     && isset($payload['recebedor']['convenio'])
@@ -129,7 +137,6 @@ final class LoadJourney4PixServiceTest extends TestCase
                     && $payload['vinculo']['devedor']['nome'] === self::PAYER_DATA['clientFullName']
                     && $payload['vinculo']['devedor']['cnpj'] === self::PAYER_DATA['payerDocValue']
                     && $payload['calendario']['periodicidade'] === 'MENSAL'
-                    && $payload['valor']['valorRec'] === '100.00'
                     && $payload['loc'] === 123
                     && $payload['politicaRetentativa'] === 'NAO_PERMITE'
                     && $payload['recebedor']['convenio'] === '34627';
@@ -250,5 +257,90 @@ final class LoadJourney4PixServiceTest extends TestCase
         self::assertSame('REC_NEW_005', $response['data']['idRec']);
 
         $GLOBALS['lknbbpix_gateway_variables']['recurrence_object_name'] = 'Fatura WHMCS';
+    }
+
+    public function testRunThrowsWhenInvoiceDueDateIsOverdueBeforeCallingCobv(): void
+    {
+        $GLOBALS['lknbbpix_test_invoices'][2004] = [
+            'balance' => '100.00',
+            'duedate' => date('Y-m-d', strtotime('-1 day')),
+            'total' => '100.00',
+            'notes' => ''
+        ];
+
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $pixRepo->expects(self::never())->method('criarCobV');
+        $authRepo->expects(self::never())->method('findCreatedByClientAndDueDay');
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Fatura vencida não pode seguir na Jornada 4. Utilize o fluxo manual.');
+
+        $service->run(2004, 106, 10, 'LKN0000002004ABCDE1234567', self::PAYER_DATA);
+    }
+
+    public function testRunThrowsPublicValidationMessageWhenBbReturnsValidationDetail(): void
+    {
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->expects(self::once())
+            ->method('findCreatedByClientAndDueDay')
+            ->willReturn([
+                'success' => true,
+                'data' => ['auth' => null],
+            ]);
+
+        $pixRepo->expects(self::once())
+            ->method('criarCobV')
+            ->willReturn([
+                'success' => false,
+                'data' => [
+                    'statusCode' => 400,
+                    'detail' => 'Número CPF ou CNPJ do Devedor não ativo na Receita Federal. (200-000) '
+                ]
+            ]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(Journey4PublicException::class);
+        $this->expectExceptionMessage(
+            'Erro ao gerar o PIX, motivo: Número CPF ou CNPJ do Devedor não ativo na Receita Federal. (200-000)'
+        );
+
+        $service->run(2005, 107, 10, 'LKN0000002005ABCDE1234567', self::PAYER_DATA);
+    }
+
+    public function testRunThrowsGenericPublicMessageWhenErrorIsNotValidation(): void
+    {
+        $pixRepo = $this->createMock(PixAutoRepository::class);
+        $authRepo = $this->createMock(AuthRepository::class);
+
+        $authRepo->expects(self::once())
+            ->method('findCreatedByClientAndDueDay')
+            ->willReturn([
+                'success' => true,
+                'data' => ['auth' => null],
+            ]);
+
+        $pixRepo->expects(self::once())
+            ->method('criarCobV')
+            ->willReturn([
+                'success' => false,
+                'data' => [
+                    'statusCode' => 503,
+                    'detail' => 'Serviço indisponível'
+                ]
+            ]);
+
+        $service = new LoadJourney4PixService($pixRepo, $authRepo);
+
+        $this->expectException(Journey4PublicException::class);
+        $this->expectExceptionMessage('Erro interno ao gerar proposta do Pix Automático.');
+
+        $service->run(2006, 108, 10, 'LKN0000002006ABCDE1234567', self::PAYER_DATA);
     }
 }

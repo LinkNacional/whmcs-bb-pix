@@ -2,6 +2,7 @@
 
 namespace Lkn\BBPix\App\Pix\Services;
 
+use DateTimeImmutable;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Logger;
@@ -23,7 +24,13 @@ final class DecisionService
         $this->authRepository = $authRepository ?? new AuthRepository();
     }
 
-    public function evaluate(string $origemFatura, int $clientId, int $dueDay, int $currentInvoiceId = 0): string
+    public function evaluate(
+        string $origemFatura,
+        int $clientId,
+        int $dueDay,
+        string $dueDate,
+        int $currentInvoiceId = 0
+    ): string
     {
         if (!Config::setting('enable_pix_automatic')) {
             return self::MANUAL_TRADICIONAL;
@@ -31,6 +38,22 @@ final class DecisionService
 
         try {
             $origemFatura = strtoupper(trim($origemFatura));
+            $dueDate = $this->normalizeDate($dueDate);
+
+            if ($dueDate !== '' && $this->isDateBeforeToday($dueDate)) {
+                Logger::log(
+                    'DecisionService: automatic_blocked_overdue',
+                    [
+                        'origemFatura' => $origemFatura,
+                        'clientId' => $clientId,
+                        'dueDay' => $dueDay,
+                        'dueDate' => $dueDate,
+                        'currentInvoiceId' => $currentInvoiceId
+                    ]
+                );
+
+                return self::MANUAL_TRADICIONAL;
+            }
 
             if ($this->hasDueDayLockedByScheduledInvoice($clientId, $dueDay, $currentInvoiceId)) {
                 Logger::log(
@@ -100,6 +123,35 @@ final class DecisionService
 
             return self::MANUAL_TRADICIONAL;
         }
+    }
+
+    private function normalizeDate(string $date): string
+    {
+        $date = trim($date);
+
+        if ($date === '') {
+            return '';
+        }
+
+        $timestamp = strtotime($date);
+
+        if ($timestamp === false) {
+            return '';
+        }
+
+        return date('Y-m-d', $timestamp);
+    }
+
+    private function isDateBeforeToday(string $date): bool
+    {
+        $dateObj = DateTimeImmutable::createFromFormat('Y-m-d', $date);
+        $todayObj = new DateTimeImmutable('today');
+
+        if ($dateObj === false) {
+            return false;
+        }
+
+        return $dateObj < $todayObj;
     }
 
     private function hasDueDayLockedByScheduledInvoice(int $clientId, int $dueDay, int $currentInvoiceId): bool

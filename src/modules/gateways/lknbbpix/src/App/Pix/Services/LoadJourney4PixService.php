@@ -2,6 +2,7 @@
 
 namespace Lkn\BBPix\App\Pix\Services;
 
+use Lkn\BBPix\App\Pix\Exceptions\Journey4PublicException;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
 use Lkn\BBPix\Helpers\Config;
@@ -28,6 +29,10 @@ final class LoadJourney4PixService
     {
         $amount = $this->normalizeAmount(Invoice::getBalance($invoiceId));
         $dueDate = $this->normalizeDueDate(Invoice::getDueDate($invoiceId));
+
+        if ($dueDate !== '' && $this->isDateBeforeToday($dueDate)) {
+            throw new RuntimeException('Fatura vencida não pode seguir na Jornada 4. Utilize o fluxo manual.');
+        }
 
         $cached = $this->authRepository->findCreatedByClientAndDueDay($clientId, $dueDay);
 
@@ -153,9 +158,6 @@ final class LoadJourney4PixService
                 'dataInicial'   => $dataInicial,
                 'periodicidade' => 'MENSAL',
             ],
-            'valor' => [
-                'valorRec' => number_format((float) $amount, 2, '.', ''),
-            ],
             'loc' => (int) $locationId,
             'politicaRetentativa' => 'NAO_PERMITE',
         ];
@@ -215,6 +217,18 @@ final class LoadJourney4PixService
         return date('Y-m-d', $timestamp);
     }
 
+    private function isDateBeforeToday(string $date): bool
+    {
+        $dateObj = \DateTimeImmutable::createFromFormat('Y-m-d', $date);
+        $todayObj = new \DateTimeImmutable('today');
+
+        if ($dateObj === false) {
+            return false;
+        }
+
+        return $dateObj < $todayObj;
+    }
+
     private function isCachedSnapshotValid(
         string $cachedAmount,
         string $cachedDueDate,
@@ -231,10 +245,42 @@ final class LoadJourney4PixService
     private function extractSuccessData(array|string $response, string $step): array
     {
         if (!is_array($response) || !($response['success'] ?? false)) {
-            throw new RuntimeException("Falha na etapa {$step}.");
+            $responseData = is_array($response) ? (array) ($response['data'] ?? []) : [];
+            $statusCode = (int) ($responseData['statusCode'] ?? 500);
+            $detail = $this->sanitizePublicDetail((string) ($responseData['detail'] ?? ''));
+
+            if ($this->isValidationStatus($statusCode) && $detail !== '') {
+                throw new Journey4PublicException(
+                    "Erro ao gerar o PIX, motivo: {$detail}",
+                    $statusCode,
+                    $step
+                );
+            }
+
+            throw new Journey4PublicException('Erro interno ao gerar proposta do Pix Automático.', 500, $step);
         }
 
         return (array) ($response['data'] ?? []);
+    }
+
+    private function isValidationStatus(int $statusCode): bool
+    {
+        return in_array($statusCode, [400, 422], true);
+    }
+
+    private function sanitizePublicDetail(string $detail): string
+    {
+        $detail = trim(preg_replace('/\s+/', ' ', $detail));
+
+        if ($detail === '') {
+            return '';
+        }
+
+        if (function_exists('mb_substr')) {
+            return mb_substr($detail, 0, 220);
+        }
+
+        return substr($detail, 0, 220);
     }
 
     private function extractLocationId(array $data): string

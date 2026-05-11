@@ -46,7 +46,7 @@ final class DecisionServiceTest extends TestCase
 
         $service = new DecisionService($authRepository);
 
-        self::assertSame($expectedDecision, $service->evaluate($origemFatura, 10, 15));
+        self::assertSame($expectedDecision, $service->evaluate($origemFatura, 10, 15, '2099-12-31'));
     }
 
     public function evaluateProvider(): array
@@ -95,7 +95,7 @@ final class DecisionServiceTest extends TestCase
 
         self::assertSame(
             DecisionService::MANUAL_TRADICIONAL,
-            $service->evaluate('CRON_RENOVACAO', 10, 15)
+            $service->evaluate('CRON_RENOVACAO', 10, 15, '2099-12-31')
         );
     }
 
@@ -112,7 +112,7 @@ final class DecisionServiceTest extends TestCase
 
         self::assertSame(
             DecisionService::MANUAL_TRADICIONAL,
-            $service->evaluate('CRON_RENOVACAO', 10, 15)
+            $service->evaluate('CRON_RENOVACAO', 10, 15, '2099-12-31')
         );
     }
 
@@ -128,7 +128,46 @@ final class DecisionServiceTest extends TestCase
 
         self::assertSame(
             DecisionService::MANUAL_TRADICIONAL,
-            $service->evaluate('CRON_RENOVACAO', 10, 15)
+            $service->evaluate('CRON_RENOVACAO', 10, 15, '2099-12-31')
+        );
+    }
+
+    public function testEvaluateReturnsManualTraditionalWhenDueDateIsOverdue(): void
+    {
+        $authRepository = $this->createMock(AuthRepository::class);
+
+        $authRepository->expects(self::never())
+            ->method('findApprovedByClientAndDueDay');
+
+        $service = new DecisionService($authRepository);
+        $yesterday = date('Y-m-d', strtotime('-1 day'));
+
+        self::assertSame(
+            DecisionService::MANUAL_TRADICIONAL,
+            $service->evaluate('CRON_RENOVACAO', 10, 15, $yesterday)
+        );
+    }
+
+    public function testEvaluateKeepsAutomaticFlowEligibilityWhenDueDateIsToday(): void
+    {
+        $authRepository = $this->createMock(AuthRepository::class);
+
+        $authRepository->expects(self::once())
+            ->method('findApprovedByClientAndDueDay')
+            ->with(10, 15)
+            ->willReturn([
+                'success' => true,
+                'data' => [
+                    'auth' => null
+                ]
+            ]);
+
+        $service = new DecisionService($authRepository);
+        $today = date('Y-m-d');
+
+        self::assertSame(
+            DecisionService::JORNADA4,
+            $service->evaluate('CRON_RENOVACAO', 10, 15, $today)
         );
     }
 }

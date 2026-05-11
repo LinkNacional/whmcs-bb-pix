@@ -116,6 +116,7 @@ add_hook('InvoiceCreationPreEmail', 1, function (array $vars): array {
         }
 
         $clientId = (int) $invoice->userid;
+        $dueDate = date('Y-m-d', strtotime((string) $invoice->duedate));
         $dueDay = (int) date('d', strtotime((string) $invoice->duedate));
         $invoiceOrigin = (new InvoiceOriginHelper())->classify($invoiceId);
 
@@ -123,7 +124,7 @@ add_hook('InvoiceCreationPreEmail', 1, function (array $vars): array {
             return [];
         }
 
-        $decision = (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $invoiceId);
+        $decision = (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $dueDate, $invoiceId);
 
         if ($decision !== DecisionService::COBR_AUTOMATICO) {
             return [];
@@ -204,12 +205,13 @@ add_hook('ClientAreaPageViewInvoice', 1, function (array $vars): array {
         }
 
         $clientId = (int) $invoice->userid;
+        $dueDate = date('Y-m-d', strtotime((string) $invoice->duedate));
         $dueDay = (int) date('d', strtotime((string) $invoice->duedate));
         $invoiceOrigin = (new InvoiceOriginHelper())->classify($invoiceId);
 
         $decision = $invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL
             ? DecisionService::MANUAL_TRADICIONAL
-            : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $invoiceId);
+            : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $dueDate, $invoiceId);
 
         return [
             'lknbbpixFlowDecision' => $decision,

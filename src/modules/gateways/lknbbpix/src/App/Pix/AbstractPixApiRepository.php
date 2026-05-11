@@ -68,6 +68,35 @@ abstract class AbstractPixApiRepository
         return $response['data'];
     }
 
+    /**
+     * Consults a Pix transaction directly by e2eid (End-to-End ID).
+     * 
+     * This is a direct validation endpoint to check if a Pix is eligible for refund
+     * before attempting the refund operation.
+     * 
+     * @param string $e2eid The end-to-end ID (e.g., E18236120202605111625S085D096FE7)
+     * @return array Pix transaction data if found and valid
+     * @throws PixException on 404, 400, or other API errors
+     */
+    protected function consultPixByEndToEndIdBase(string $e2eid): array
+    {
+        $e2eid = trim($e2eid);
+        
+        $response = $this->request('GET', "pix/$e2eid");
+        
+        Logger::log(
+            'Consultar Pix por E2EID (Pré-validação de Reembolso)',
+            ['e2eid' => $e2eid],
+            $response
+        );
+        
+        if (!($response['success'] ?? false) || !is_array($response['data'])) {
+            throw new PixException(PixExceptionCodes::PIX_INELIGIBLE_FOR_REFUND);
+        }
+        
+        return $this->getResponseData($response);
+    }
+
     protected function performRequest(
         string $accessToken,
         string $method,

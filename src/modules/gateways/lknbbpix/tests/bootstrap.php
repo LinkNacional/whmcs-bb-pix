@@ -14,6 +14,8 @@ $GLOBALS['lknbbpix_gateway_variables'] = [
     'enable_pix_automatic' => 'on',
 ];
 
+$GLOBALS['lknbbpix_test_invoices'] = [];
+
 if (!function_exists('enum_exists')) {
     function enum_exists(string $enum, bool $autoload = true): bool
     {
@@ -38,6 +40,12 @@ if (!function_exists('localAPI')) {
     function localAPI(string $command, array $postData = []): array
     {
         if ($command === 'GetInvoice') {
+            $invoiceId = (int) ($postData['invoiceid'] ?? 0);
+
+            if ($invoiceId > 0 && isset($GLOBALS['lknbbpix_test_invoices'][$invoiceId])) {
+                return $GLOBALS['lknbbpix_test_invoices'][$invoiceId];
+            }
+
             return [
                 'balance' => '100.00',
                 'duedate' => '2026-05-20',

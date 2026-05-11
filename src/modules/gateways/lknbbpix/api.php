@@ -9,6 +9,7 @@
 
 use Lkn\BBPix\App\Pix\Controllers\ApiController;
 use Lkn\BBPix\App\Pix\Controllers\DiscountController;
+use Lkn\BBPix\App\Pix\Exceptions\Journey4PublicException;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\PixController;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
@@ -70,17 +71,94 @@ $isRecAlreadyCancelledError = static function (array $result): bool {
     return str_contains($combined, 'cancelad') || str_contains($combined, 'revogad');
 };
 
-$isValidAdminCsrfToken = static function (object $request): bool {
-    $requestToken = (string) (
-        $request->csrfToken
-        ?? $request->token
-        ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')
-    );
-    $sessionToken = (string) ($_SESSION['lkn-bb-pix-admin'] ?? '');
+$extractAdminCsrfContext = static function (object $request): array {
+    $bodyCsrfToken = trim((string) ($request->csrfToken ?? ''));
+    $bodyToken = trim((string) ($request->token ?? ''));
+    $headerToken = trim((string) ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''));
 
-    return $requestToken !== ''
-        && $sessionToken !== ''
-        && hash_equals($sessionToken, $requestToken);
+    $requestToken = $bodyCsrfToken !== ''
+        ? $bodyCsrfToken
+        : ($bodyToken !== '' ? $bodyToken : $headerToken);
+
+    $requestTokenSource = $bodyCsrfToken !== ''
+        ? 'body.csrfToken'
+        : ($bodyToken !== '' ? 'body.token' : ($headerToken !== '' ? 'header.x-csrf-token' : 'none'));
+
+    $sessionCandidates = array_values(array_filter([
+        trim((string) ($_SESSION['token'] ?? '')),
+        trim((string) ($_SESSION['tkval'] ?? '')),
+        trim((string) ($_SESSION['csrfToken'] ?? '')),
+    ], static fn (string $value): bool => $value !== ''));
+
+    $runtimeCandidates = [];
+
+    if (function_exists('generate_token')) {
+        try {
+            $runtimePlainToken = trim((string) generate_token('plain'));
+
+            if ($runtimePlainToken !== '') {
+                $runtimeCandidates[] = $runtimePlainToken;
+            }
+
+            if (empty($runtimeCandidates)) {
+                $runtimeDefaultToken = trim((string) generate_token());
+
+                if ($runtimeDefaultToken !== '') {
+                    $runtimeCandidates[] = $runtimeDefaultToken;
+                }
+            }
+        } catch (Throwable) {
+            // Runtime candidate is optional and should never block request handling.
+        }
+    }
+
+    $nativeCandidates = array_values(array_unique(array_merge($sessionCandidates, $runtimeCandidates)));
+
+    $legacyToken = trim((string) ($_SESSION['lkn-bb-pix-admin'] ?? ''));
+
+    $sessionMatch = false;
+    foreach ($sessionCandidates as $sessionToken) {
+        if ($requestToken !== '' && hash_equals($sessionToken, $requestToken)) {
+            $sessionMatch = true;
+            break;
+        }
+    }
+
+    $runtimeMatch = false;
+    foreach ($runtimeCandidates as $runtimeToken) {
+        if ($requestToken !== '' && hash_equals($runtimeToken, $requestToken)) {
+            $runtimeMatch = true;
+            break;
+        }
+    }
+
+    $nativeMatch = $sessionMatch || $runtimeMatch;
+
+    $legacyMatch = $legacyToken !== '' && $requestToken !== '' && hash_equals($legacyToken, $requestToken);
+
+    return [
+        'requestToken' => $requestToken,
+        'requestTokenSource' => $requestTokenSource,
+        'requestTokenLength' => strlen($requestToken),
+        'sessionCandidatesCount' => count($sessionCandidates),
+        'runtimeCandidatesCount' => count($runtimeCandidates),
+        'nativeCandidatesCount' => count($nativeCandidates),
+        'legacyTokenPresent' => $legacyToken !== '',
+        'sessionMatch' => $sessionMatch,
+        'runtimeMatch' => $runtimeMatch,
+        'nativeMatch' => $nativeMatch,
+        'legacyMatch' => $legacyMatch,
+        // TEMP: keep short hash fingerprint to diagnose session/token mismatch without exposing secret.
+        'requestTokenFingerprint' => $requestToken !== '' ? substr(hash('sha256', $requestToken), 0, 12) : '',
+    ];
+};
+
+$isValidAdminCsrfToken = static function (array $csrfContext): bool {
+    if (($csrfContext['requestToken'] ?? '') === '') {
+        return false;
+    }
+
+    return (bool) (($csrfContext['nativeMatch'] ?? false) || ($csrfContext['legacyMatch'] ?? false));
 };
 
 switch ($request->action) {
@@ -141,15 +219,41 @@ switch ($request->action) {
             Response::api(false, ['error' => 'Acesso negado.']);
         }
 
-        if (!$isValidAdminCsrfToken($request)) {
+        $csrfContext = $extractAdminCsrfContext($request);
+
+        if (!$isValidAdminCsrfToken($csrfContext)) {
+            Logger::log(
+                'Falha de CSRF no cancel-auto-auth (temporário)',
+                [
+                    'action' => 'cancel-auto-auth',
+                    'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                    'clientId' => (int) ($request->clientId ?? 0),
+                    'idRec' => trim((string) ($request->idRec ?? '')),
+                    'sessionIdPresent' => session_id() !== '',
+                    'csrf' => [
+                        'source' => (string) ($csrfContext['requestTokenSource'] ?? 'none'),
+                        'requestTokenLength' => (int) ($csrfContext['requestTokenLength'] ?? 0),
+                        'requestTokenFingerprint' => (string) ($csrfContext['requestTokenFingerprint'] ?? ''),
+                        'sessionCandidatesCount' => (int) ($csrfContext['sessionCandidatesCount'] ?? 0),
+                        'runtimeCandidatesCount' => (int) ($csrfContext['runtimeCandidatesCount'] ?? 0),
+                        'nativeCandidatesCount' => (int) ($csrfContext['nativeCandidatesCount'] ?? 0),
+                        'legacyTokenPresent' => (bool) ($csrfContext['legacyTokenPresent'] ?? false),
+                        'sessionMatch' => (bool) ($csrfContext['sessionMatch'] ?? false),
+                        'runtimeMatch' => (bool) ($csrfContext['runtimeMatch'] ?? false),
+                        'nativeMatch' => (bool) ($csrfContext['nativeMatch'] ?? false),
+                        'legacyMatch' => (bool) ($csrfContext['legacyMatch'] ?? false),
+                    ],
+                ]
+            );
+
             http_response_code(403);
             Response::api(false, ['error' => 'Token CSRF inválido.']);
         }
 
-        $idRec = strtoupper(trim((string) ($request->idRec ?? '')));
+        $idRec = trim((string) ($request->idRec ?? ''));
         $clientId = (int) ($request->clientId ?? 0);
 
-        if ($idRec === '' || !preg_match('/^[A-Z0-9]{1,35}$/', $idRec)) {
+        if ($idRec === '' || !preg_match('/^[A-Za-z0-9]{1,35}$/', $idRec)) {
             http_response_code(422);
             Response::api(false, ['error' => 'idRec inválido.']);
         }
@@ -446,6 +550,7 @@ switch ($request->action) {
 
         try {
             $clientId = (int) $invoice->userid;
+            $dueDate = date('Y-m-d', strtotime((string) $invoice->duedate));
             $dueDay = (int) date('d', strtotime((string) $invoice->duedate));
 
             if (!Config::setting('enable_pix_automatic')) {
@@ -457,7 +562,7 @@ switch ($request->action) {
 
             $decision = $invoiceOrigin === InvoiceOriginHelper::MANUAL_TRADICIONAL
                 ? DecisionService::MANUAL_TRADICIONAL
-                : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay);
+                : (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay, $dueDate);
 
             if ($decision !== DecisionService::JORNADA4) {
                 http_response_code(409);
@@ -536,6 +641,19 @@ switch ($request->action) {
                 'discountPercentage' => $discountPercentage,
                 'taxAmount' => $taxAmount,
             ]);
+        } catch (Journey4PublicException $e) {
+            Logger::log(
+                'Erro de validação ao carregar Jornada 4 via API',
+                [
+                    'invoiceId' => $invoiceId,
+                    'step' => $e->getStep(),
+                    'statusCode' => $e->getStatusCode(),
+                ],
+                ['error' => $e->getMessage()]
+            );
+
+            http_response_code($e->getStatusCode());
+            Response::api(false, ['error' => $e->getMessage()]);
         } catch (Throwable $e) {
             Logger::log(
                 'Erro ao carregar Jornada 4 via API',

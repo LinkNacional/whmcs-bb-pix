@@ -710,12 +710,13 @@ function lknbbpix_resolve_invoice_flow(int $invoiceId, int $clientId): array
         ->where('id', $invoiceId)
         ->first(['duedate']);
 
-    $dueDay = (int) date('d', strtotime((string) ($invoice->duedate ?? date('Y-m-d'))));
+    $dueDate = date('Y-m-d', strtotime((string) ($invoice->duedate ?? date('Y-m-d'))));
+    $dueDay = (int) date('d', strtotime($dueDate));
     $origin = (new InvoiceOriginHelper())->classify($invoiceId);
 
     $decision = $origin === InvoiceOriginHelper::MANUAL_TRADICIONAL
         ? DecisionService::MANUAL_TRADICIONAL
-        : (new DecisionService())->evaluate($origin, $clientId, $dueDay, $invoiceId);
+        : (new DecisionService())->evaluate($origin, $clientId, $dueDay, $dueDate, $invoiceId);
 
     return [
         'decision' => $decision,
