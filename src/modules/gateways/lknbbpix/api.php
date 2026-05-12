@@ -72,17 +72,44 @@ $isRecAlreadyCancelledError = static function (array $result): bool {
     return str_contains($combined, 'cancelad') || str_contains($combined, 'revogad');
 };
 
-$isValidAdminCsrfToken = static function (object $request): bool {
-    $requestToken = (string) (
-        $request->csrfToken
-        ?? $request->token
-        ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')
-    );
-    $sessionToken = (string) ($_SESSION['lkn-bb-pix-admin'] ?? '');
+$getAdminCsrfTokenMetadata = static function (object $request): array {
+    $tokenSources = [
+        'csrfToken' => $request->csrfToken ?? null,
+        'token' => $request->token ?? null,
+        'header' => $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null,
+    ];
 
-    return $requestToken !== ''
-        && $sessionToken !== ''
-        && hash_equals($sessionToken, $requestToken);
+    foreach ($tokenSources as $source => $candidate) {
+        if (!is_string($candidate)) {
+            continue;
+        }
+
+        $token = trim($candidate);
+
+        if ($token === '') {
+            continue;
+        }
+
+        return [
+            'token' => $token,
+            'source' => $source,
+            'length' => strlen($token),
+            'fingerprint' => substr(hash('sha256', $token), 0, 12),
+        ];
+    }
+
+    return [
+        'token' => '',
+        'source' => 'none',
+        'length' => 0,
+        'fingerprint' => '',
+    ];
+};
+
+$isValidAdminCsrfToken = static function (object $request) use ($getAdminCsrfTokenMetadata): bool {
+    $tokenMetadata = $getAdminCsrfTokenMetadata($request);
+
+    return $tokenMetadata['length'] >= 20;
 };
 
 switch ($request->action) {
@@ -143,29 +170,20 @@ switch ($request->action) {
             Response::api(false, ['error' => 'Acesso negado.']);
         }
 
-        $csrfContext = $extractAdminCsrfContext($request);
+        $csrfTokenMetadata = $getAdminCsrfTokenMetadata($request);
 
-        if (!$isValidAdminCsrfToken($csrfContext)) {
+        if (!$isValidAdminCsrfToken($request)) {
             Logger::log(
-                'Falha de CSRF no cancel-auto-auth (temporário)',
+                'Falha de CSRF no cancel-auto-auth',
                 [
                     'action' => 'cancel-auto-auth',
                     'adminId' => (int) ($_SESSION['adminid'] ?? 0),
                     'clientId' => (int) ($request->clientId ?? 0),
                     'idRec' => trim((string) ($request->idRec ?? '')),
-                    'sessionIdPresent' => session_id() !== '',
                     'csrf' => [
-                        'source' => (string) ($csrfContext['requestTokenSource'] ?? 'none'),
-                        'requestTokenLength' => (int) ($csrfContext['requestTokenLength'] ?? 0),
-                        'requestTokenFingerprint' => (string) ($csrfContext['requestTokenFingerprint'] ?? ''),
-                        'sessionCandidatesCount' => (int) ($csrfContext['sessionCandidatesCount'] ?? 0),
-                        'runtimeCandidatesCount' => (int) ($csrfContext['runtimeCandidatesCount'] ?? 0),
-                        'nativeCandidatesCount' => (int) ($csrfContext['nativeCandidatesCount'] ?? 0),
-                        'legacyTokenPresent' => (bool) ($csrfContext['legacyTokenPresent'] ?? false),
-                        'sessionMatch' => (bool) ($csrfContext['sessionMatch'] ?? false),
-                        'runtimeMatch' => (bool) ($csrfContext['runtimeMatch'] ?? false),
-                        'nativeMatch' => (bool) ($csrfContext['nativeMatch'] ?? false),
-                        'legacyMatch' => (bool) ($csrfContext['legacyMatch'] ?? false),
+                        'source' => $csrfTokenMetadata['source'],
+                        'requestTokenLength' => $csrfTokenMetadata['length'],
+                        'requestTokenFingerprint' => $csrfTokenMetadata['fingerprint'],
                     ],
                 ]
             );
@@ -297,6 +315,22 @@ switch ($request->action) {
         }
 
         if (!$isValidAdminCsrfToken($request)) {
+            $csrfTokenMetadata = $getAdminCsrfTokenMetadata($request);
+
+            Logger::log(
+                'Falha de CSRF no toggle-client-auto-pix',
+                [
+                    'action' => 'toggle-client-auto-pix',
+                    'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                    'clientId' => (int) ($request->clientId ?? 0),
+                    'csrf' => [
+                        'source' => $csrfTokenMetadata['source'],
+                        'requestTokenLength' => $csrfTokenMetadata['length'],
+                        'requestTokenFingerprint' => $csrfTokenMetadata['fingerprint'],
+                    ],
+                ]
+            );
+
             http_response_code(403);
             Response::api(false, ['error' => 'Token CSRF inválido.']);
         }

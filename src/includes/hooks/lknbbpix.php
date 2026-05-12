@@ -316,7 +316,7 @@ add_hook('UpdateAdminPaymentGateway', 1, function (array $vars): void {
     }
 });
 
-add_hook('PreCronJob', 1, function (): void {
+add_hook('DailyCronJob', 1, function (): void { // PreCronJob Alterado
     $batchLimit = 50;
     $hoursThreshold = 24;
 
