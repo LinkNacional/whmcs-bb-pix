@@ -13,6 +13,7 @@ use Lkn\BBPix\App\Pix\Exceptions\Journey4PublicException;
 use Lkn\BBPix\App\Pix\PixAutoRepository;
 use Lkn\BBPix\App\Pix\PixController;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
+use Lkn\BBPix\App\Pix\Repositories\ClientAutoSettingsRepository;
 use Lkn\BBPix\App\Pix\Services\DecisionService;
 use Lkn\BBPix\App\Pix\Services\DiscountService;
 use Lkn\BBPix\App\Pix\Services\LoadJourney4PixService;
@@ -71,94 +72,17 @@ $isRecAlreadyCancelledError = static function (array $result): bool {
     return str_contains($combined, 'cancelad') || str_contains($combined, 'revogad');
 };
 
-$extractAdminCsrfContext = static function (object $request): array {
-    $bodyCsrfToken = trim((string) ($request->csrfToken ?? ''));
-    $bodyToken = trim((string) ($request->token ?? ''));
-    $headerToken = trim((string) ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''));
+$isValidAdminCsrfToken = static function (object $request): bool {
+    $requestToken = (string) (
+        $request->csrfToken
+        ?? $request->token
+        ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')
+    );
+    $sessionToken = (string) ($_SESSION['lkn-bb-pix-admin'] ?? '');
 
-    $requestToken = $bodyCsrfToken !== ''
-        ? $bodyCsrfToken
-        : ($bodyToken !== '' ? $bodyToken : $headerToken);
-
-    $requestTokenSource = $bodyCsrfToken !== ''
-        ? 'body.csrfToken'
-        : ($bodyToken !== '' ? 'body.token' : ($headerToken !== '' ? 'header.x-csrf-token' : 'none'));
-
-    $sessionCandidates = array_values(array_filter([
-        trim((string) ($_SESSION['token'] ?? '')),
-        trim((string) ($_SESSION['tkval'] ?? '')),
-        trim((string) ($_SESSION['csrfToken'] ?? '')),
-    ], static fn (string $value): bool => $value !== ''));
-
-    $runtimeCandidates = [];
-
-    if (function_exists('generate_token')) {
-        try {
-            $runtimePlainToken = trim((string) generate_token('plain'));
-
-            if ($runtimePlainToken !== '') {
-                $runtimeCandidates[] = $runtimePlainToken;
-            }
-
-            if (empty($runtimeCandidates)) {
-                $runtimeDefaultToken = trim((string) generate_token());
-
-                if ($runtimeDefaultToken !== '') {
-                    $runtimeCandidates[] = $runtimeDefaultToken;
-                }
-            }
-        } catch (Throwable) {
-            // Runtime candidate is optional and should never block request handling.
-        }
-    }
-
-    $nativeCandidates = array_values(array_unique(array_merge($sessionCandidates, $runtimeCandidates)));
-
-    $legacyToken = trim((string) ($_SESSION['lkn-bb-pix-admin'] ?? ''));
-
-    $sessionMatch = false;
-    foreach ($sessionCandidates as $sessionToken) {
-        if ($requestToken !== '' && hash_equals($sessionToken, $requestToken)) {
-            $sessionMatch = true;
-            break;
-        }
-    }
-
-    $runtimeMatch = false;
-    foreach ($runtimeCandidates as $runtimeToken) {
-        if ($requestToken !== '' && hash_equals($runtimeToken, $requestToken)) {
-            $runtimeMatch = true;
-            break;
-        }
-    }
-
-    $nativeMatch = $sessionMatch || $runtimeMatch;
-
-    $legacyMatch = $legacyToken !== '' && $requestToken !== '' && hash_equals($legacyToken, $requestToken);
-
-    return [
-        'requestToken' => $requestToken,
-        'requestTokenSource' => $requestTokenSource,
-        'requestTokenLength' => strlen($requestToken),
-        'sessionCandidatesCount' => count($sessionCandidates),
-        'runtimeCandidatesCount' => count($runtimeCandidates),
-        'nativeCandidatesCount' => count($nativeCandidates),
-        'legacyTokenPresent' => $legacyToken !== '',
-        'sessionMatch' => $sessionMatch,
-        'runtimeMatch' => $runtimeMatch,
-        'nativeMatch' => $nativeMatch,
-        'legacyMatch' => $legacyMatch,
-        // TEMP: keep short hash fingerprint to diagnose session/token mismatch without exposing secret.
-        'requestTokenFingerprint' => $requestToken !== '' ? substr(hash('sha256', $requestToken), 0, 12) : '',
-    ];
-};
-
-$isValidAdminCsrfToken = static function (array $csrfContext): bool {
-    if (($csrfContext['requestToken'] ?? '') === '') {
-        return false;
-    }
-
-    return (bool) (($csrfContext['nativeMatch'] ?? false) || ($csrfContext['legacyMatch'] ?? false));
+    return $requestToken !== ''
+        && $sessionToken !== ''
+        && hash_equals($sessionToken, $requestToken);
 };
 
 switch ($request->action) {
@@ -362,6 +286,102 @@ switch ($request->action) {
 
             http_response_code(500);
             Response::api(false, ['error' => 'Erro interno ao cancelar autorização.']);
+        }
+
+        break;
+
+    case 'toggle-client-auto-pix':
+        if (!Auth::isAdminLogged(['Configure Payment Gateways'])) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Acesso negado.']);
+        }
+
+        if (!$isValidAdminCsrfToken($request)) {
+            http_response_code(403);
+            Response::api(false, ['error' => 'Token CSRF inválido.']);
+        }
+
+        if (!Config::setting('enable_pix_automatic')) {
+            http_response_code(409);
+            Response::api(false, ['error' => 'O Pix Automático está desabilitado globalmente no módulo.']);
+        }
+
+        $clientId = (int) ($request->clientId ?? 0);
+        $enabledRaw = $request->enabled ?? null;
+        $enabled = filter_var($enabledRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        if ($clientId <= 0) {
+            http_response_code(422);
+            Response::api(false, ['error' => 'clientId inválido.']);
+        }
+
+        if (!is_bool($enabled)) {
+            http_response_code(422);
+            Response::api(false, ['error' => 'Parâmetro enabled inválido.']);
+        }
+
+        try {
+            $settingsRepository = new ClientAutoSettingsRepository();
+
+            if ($enabled === false && $settingsRepository->hasBlockingActiveAuth($clientId)) {
+                http_response_code(409);
+                Response::api(false, [
+                    'error' => 'Para desabilitar o Pix Automático, cancele primeiro as autorizações CRIADA/APROVADA do cliente.',
+                    'code' => 'active_auth_exists',
+                ]);
+            }
+
+            $persistResponse = $settingsRepository->setEnabledForClient($clientId, $enabled);
+
+            if (!($persistResponse['success'] ?? false)) {
+                Logger::log(
+                    'Falha ao persistir toggle de Pix Automático por cliente',
+                    [
+                        'action' => 'toggle-client-auto-pix',
+                        'clientId' => $clientId,
+                        'enabled' => $enabled,
+                        'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                    ],
+                    ['persistResponse' => $persistResponse]
+                );
+
+                http_response_code(500);
+                Response::api(false, ['error' => 'Falha ao salvar a configuração de Pix Automático do cliente.']);
+            }
+
+            Logger::log(
+                'Toggle de Pix Automático por cliente atualizado no admin',
+                [
+                    'action' => 'toggle-client-auto-pix',
+                    'clientId' => $clientId,
+                    'enabled' => $enabled,
+                    'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                ],
+                ['persistResponse' => $persistResponse]
+            );
+
+            http_response_code(200);
+            Response::api(true, [
+                'clientId' => $clientId,
+                'enabled' => $enabled,
+                'message' => $enabled
+                    ? 'Pix Automático habilitado para o cliente.'
+                    : 'Pix Automático desabilitado para o cliente.',
+            ]);
+        } catch (Throwable $e) {
+            Logger::log(
+                'Falha no toggle de Pix Automático por cliente no admin',
+                [
+                    'action' => 'toggle-client-auto-pix',
+                    'clientId' => $clientId,
+                    'enabled' => $enabled,
+                    'adminId' => (int) ($_SESSION['adminid'] ?? 0),
+                ],
+                ['error' => $e->getMessage(), 'exception' => get_class($e)]
+            );
+
+            http_response_code(500);
+            Response::api(false, ['error' => 'Erro interno ao atualizar configuração do cliente.']);
         }
 
         break;

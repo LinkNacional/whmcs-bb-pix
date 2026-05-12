@@ -4,6 +4,8 @@ namespace Lkn\BBPix\App\Pix\Services;
 
 use DateTimeImmutable;
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
+use Lkn\BBPix\App\Pix\Repositories\ClientAutoSettingsRepository;
+use Lkn\BBPix\App\Pix\Repositories\ClientAutoSettingsRepositoryInterface;
 use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Logger;
 use WHMCS\Database\Capsule;
@@ -19,9 +21,15 @@ final class DecisionService
 
     private AuthRepository $authRepository;
 
-    public function __construct(?AuthRepository $authRepository = null)
+    private ClientAutoSettingsRepositoryInterface $clientAutoSettingsRepository;
+
+    public function __construct(
+        ?AuthRepository $authRepository = null,
+        ?ClientAutoSettingsRepositoryInterface $clientAutoSettingsRepository = null
+    )
     {
         $this->authRepository = $authRepository ?? new AuthRepository();
+        $this->clientAutoSettingsRepository = $clientAutoSettingsRepository ?? new ClientAutoSettingsRepository();
     }
 
     public function evaluate(
@@ -33,6 +41,20 @@ final class DecisionService
     ): string
     {
         if (!Config::setting('enable_pix_automatic')) {
+            return self::MANUAL_TRADICIONAL;
+        }
+
+        if (!$this->clientAutoSettingsRepository->isEnabledForClient($clientId)) {
+            Logger::log(
+                'DecisionService: manual_client_auto_pix_disabled',
+                [
+                    'origemFatura' => $origemFatura,
+                    'clientId' => $clientId,
+                    'dueDay' => $dueDay,
+                    'currentInvoiceId' => $currentInvoiceId
+                ]
+            );
+
             return self::MANUAL_TRADICIONAL;
         }
 

@@ -1,5 +1,6 @@
 <?php
 
+use Lkn\BBPix\Helpers\Config;
 use Lkn\BBPix\Helpers\Logger;
 use WHMCS\Database\Capsule;
 
@@ -19,8 +20,8 @@ add_hook('AdminAreaFooterOutput', 1, function (): string {
             return '';
         }
 
-        if (!isset($_SESSION['lkn-bb-pix-admin']) || !is_string($_SESSION['lkn-bb-pix-admin']) || $_SESSION['lkn-bb-pix-admin'] === '') {
-            $_SESSION['lkn-bb-pix-admin'] = bin2hex(random_bytes(32));
+        if (!Config::setting('enable_pix_automatic')) {
+            return '';
         }
 
         $authRows = Capsule::table('mod_lknbbpix_auths')
@@ -29,13 +30,18 @@ add_hook('AdminAreaFooterOutput', 1, function (): string {
             ->orderByDesc('id')
             ->get(['id_rec', 'periodicidade', 'due_day', 'status', 'updated_at']);
 
-        $systemUrl = rtrim((string) Capsule::table('tblconfiguration')
-            ->where('setting', 'SystemURL')
-            ->value('value'), '/');
-        $apiUrl = $systemUrl . '/modules/gateways/lknbbpix/api.php';
+        $apiUrl = '/modules/gateways/lknbbpix/api.php';
 
-        if ($authRows->isEmpty()) {
-            return '';
+        $clientAutoEnabled = true;
+
+        if (Capsule::schema()->hasTable('mod_lknbbpix_client_auto_settings')) {
+            $clientAutoSettings = Capsule::table('mod_lknbbpix_client_auto_settings')
+                ->where('client_id', $userId)
+                ->first(['auto_enabled']);
+
+            if ($clientAutoSettings) {
+                $clientAutoEnabled = ((int) ($clientAutoSettings->auto_enabled ?? 1)) === 1;
+            }
         }
 
         $statusClasses = [
@@ -71,9 +77,21 @@ add_hook('AdminAreaFooterOutput', 1, function (): string {
                 . '</tr>';
         }
 
+        if ($rowsHtml === '') {
+            $rowsHtml = '<tr><td colspan="3" class="text-muted">Nenhuma autorização Pix Automático cadastrada para este cliente.</td></tr>';
+        }
+
+        $toggleLabel = $clientAutoEnabled ? 'Ativado' : 'Desativado';
+        $toggleClass = $clientAutoEnabled ? 'btn-success' : 'btn-default';
+
         $panelHtml = '<div id="lknbbpix-auto-panel" class="clientssummarybox">'
             . '<div class="panel panel-default">'
-            . '<div class="panel-heading"><strong>PIX Automatico</strong></div>'
+            . '<div class="panel-heading">'
+            . '<div class="clearfix">'
+            . '<strong style="line-height:28px;">PIX Automatico</strong>'
+            . '<button type="button" id="lknbbpix-toggle-auto" class="btn btn-xs ' . $toggleClass . ' pull-right" data-enabled="' . ($clientAutoEnabled ? '1' : '0') . '">' . $toggleLabel . '</button>'
+            . '</div>'
+            . '</div>'
             . '<div class="panel-body" style="padding:0;">'
             . '<div id="lknbbpix-auto-feedback" style="display:none; margin:10px;" class="alert" role="alert"></div>'
             . '<div class="table-responsive">'
@@ -110,14 +128,14 @@ add_hook('AdminAreaFooterOutput', 1, function (): string {
 
         $panelHtmlJson = json_encode($panelHtml, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $apiUrlJson = json_encode($apiUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
-        $csrfTokenJson = json_encode((string) ($_SESSION['lkn-bb-pix-admin'] ?? ''), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+        $clientAutoEnabledJson = json_encode($clientAutoEnabled);
 
         return '<script>'
             . 'jQuery(function($){'
             . 'if ($("#lknbbpix-auto-panel").length) { return; }'
             . 'var meuPainelHtml = ' . $panelHtmlJson . ';'
             . 'var apiUrl = ' . $apiUrlJson . ';'
-            . 'var serverCsrfToken = ' . $csrfTokenJson . ';'
+            . 'var clientAutoEnabled = ' . $clientAutoEnabledJson . ';'
             . 'var selectedIdRec = "";'
             . 'var selectedRow = null;'
             . 'var selectedIcon = null;'
@@ -135,12 +153,60 @@ add_hook('AdminAreaFooterOutput', 1, function (): string {
             . 'box.addClass(type === "success" ? "alert-success" : "alert-danger");'
             . 'box.text(message).show();'
             . '};'
+            . 'var syncToggleButton = function(){'
+            . 'var button = $("#lknbbpix-toggle-auto");'
+            . 'if (!button.length) { return; }'
+            . 'button.removeClass("btn-success btn-default");'
+            . 'button.addClass(clientAutoEnabled ? "btn-success" : "btn-default");'
+            . 'button.text(clientAutoEnabled ? "Ativado" : "Desativado");'
+            . 'button.attr("data-enabled", clientAutoEnabled ? "1" : "0");'
+            . '};'
             . 'if ($("#tablePayMethods").closest(".clientssummarybox").length) {'
             . '$("#tablePayMethods").closest(".clientssummarybox").after(meuPainelHtml);'
             . '} else {'
             . 'var fallbackAnchor = $(".clientssummarybox").first();'
             . 'if (fallbackAnchor.length) { fallbackAnchor.after(meuPainelHtml); }'
             . '}'
+            . 'syncToggleButton();'
+            . '$(document).on("click", "#lknbbpix-toggle-auto", function(){'
+            . 'if (isLoading) { return; }'
+            . 'var csrfToken = getCsrfToken();'
+            . 'if (!csrfToken) { setFeedback("error", "Token CSRF não encontrado."); return; }'
+            . 'var targetEnabled = !clientAutoEnabled;'
+            . 'isLoading = true;'
+            . '$(this).prop("disabled", true).text("Salvando...");'
+            . 'fetch(apiUrl, {'
+            . 'method: "POST",'
+            . 'headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken},'
+            . 'body: JSON.stringify({'
+            . 'action: "toggle-client-auto-pix",'
+            . 'clientId: ' . $userId . ','
+            . 'enabled: targetEnabled,'
+            . 'csrfToken: csrfToken,'
+            . 'token: csrfToken'
+            . '})'
+            . '})'
+            . '.then(function(response){ return response.json(); })'
+            . '.then(function(payload){'
+            . 'if (payload && payload.success) {'
+            . 'clientAutoEnabled = !!(payload.data && payload.data.enabled);'
+            . 'syncToggleButton();'
+            . 'setFeedback("success", (payload.data && payload.data.message) ? payload.data.message : "Configuração atualizada com sucesso.");'
+            . 'return;'
+            . '}'
+            . 'var errorMessage = (payload && payload.data && (payload.data.error || payload.data.message)) ? (payload.data.error || payload.data.message) : "Falha ao atualizar configuração de Pix Automático.";'
+            . 'setFeedback("error", errorMessage);'
+            . 'syncToggleButton();'
+            . '})'
+            . '.catch(function(){'
+            . 'setFeedback("error", "Erro de comunicação ao atualizar configuração de Pix Automático.");'
+            . 'syncToggleButton();'
+            . '})'
+            . '.finally(function(){'
+            . 'isLoading = false;'
+            . '$("#lknbbpix-toggle-auto").prop("disabled", false);'
+            . '});'
+            . '});'
             . '$(document).on("click", ".lknbbpix-cancel-auth", function(){'
             . 'if (isLoading) { return; }'
             . 'selectedRow = $(this).closest("tr");'

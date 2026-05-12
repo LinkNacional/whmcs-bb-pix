@@ -49,6 +49,9 @@ src/
 │           │   ├── Controllers/              # ApiController, DiscountController
 │           │   ├── Services/                 # Regras de negócio (um serviço por operação)
 │           │   └── Repositories/             # Acesso ao banco de dados
+│           │       ├── AuthRepository.php    # Persistência de autorizações Pix Automático
+│           │       ├── ClientAutoSettingsRepository.php  # Configurações por cliente (toggle Pix Automático)
+│           │       └── ClientAutoSettingsRepositoryInterface.php  # Interface para injeção de dependência
 │           ├── Helpers/              # Utilitários transversais (Config, Invoice, Logger, etc.)
 │           ├── License/              # Lógica de licenciamento
 │           └── resources/            # Templates Smarty (.tpl) e JavaScript
@@ -109,6 +112,52 @@ Sempre crie `PixTaxId` via seus métodos de fábrica estáticos:
 > Regra para Pix Automático (`/cobr`): a idempotência deve usar o `txid` exigido pelo BB.
 > O módulo deve gerar `txid` determinístico (26 a 35 caracteres alfanuméricos) derivado do `invoice_id`.
 > Não usar chave arbitrária paralela para deduplicação da cobrança automática.
+
+### DecisionService — Decisão de Fluxo Pix Automático
+
+O `DecisionService` é o ponto único de decisão que determina qual fluxo seguir:
+- **MANUAL_TRADICIONAL** — Cobrança imediata padrão (sem Pix Automático)
+- **JORNADA4** — Oferta de autorização de recorrência (Pix Automático com consentimento)
+- **COBR_AUTOMATICO** — Cobrança automática usando autorização existente
+
+Parametrização:
+```php
+$decision = (new DecisionService())->evaluate($invoiceOrigin, $clientId, $dueDay);
+```
+
+O serviço verifica automaticamente se o cliente tem Pix Automático habilitado via `ClientAutoSettingsRepository`.
+
+### Repositories de Dados Locais
+
+| Repository | Responsabilidade |
+|---|---|
+| `AuthRepository` | Persistência de autorizações (`mod_lknbbpix_auths`) — CRIADA, APROVADA, CANCELADA, REJEITADA, EXPIRADA |
+| `ClientAutoSettingsRepository` | Configuração por cliente: habilita/desabilita Pix Automático e valida autorizações bloqueantes |
+
+> ✅ **Importante:** Sempre injetar `ClientAutoSettingsRepository` via construtor (não global). Respeitar a interface `ClientAutoSettingsRepositoryInterface` para testes.
+
+---
+
+## Validação de IDs e Parâmetros
+
+### idRec — Identificador de Recorrência (Case-Sensitive)
+
+O `idRec` retornado pela API do Banco do Brasil é **case-sensitive** e deve ser preservado exatamente como fornecido:
+
+- **Formato:** até 35 caracteres alfanuméricos (maiúsculas E minúsculas)
+- **Regex correto:** `/^[A-Za-z0-9]{1,35}$/`
+- **❌ Errado:** Usar `strtoupper()` ou `strtolower()` — quebra o lookup na API
+- **✅ Correto:** Manter o formato original com `trim((string) $idRec)`
+
+> 🚨 A API do Banco do Brasil armazena idRec com diferenciação de maiúsculas/minúsculas. Conversão de caso causa erro "Recorrência não encontrada".
+
+### txid — Identificador de Transação Pix
+
+O `txid` é obrigatório para Pix Automático (`PUT /cobr/{txid}`):
+
+- **Formato:** 26 a 35 caracteres alfanuméricos (sem caracteres especiais)
+- **Determinístico:** Deve ser gerado a partir do `invoice_id` (idempotência via Banco)
+- **Exemplo gerador:** `PixTxidService::generateForInvoice($invoiceId)`
 
 ---
 
@@ -246,11 +295,46 @@ O `DiscountService` calcula o valor final do Pix aplicando, em ordem de priorida
 - **Tabela customizada (Pix Automático):** `mod_lknbbpix_auths` (autorizações por cliente e ciclo).
 - **Campos mínimos em `mod_lknbbpix_auths`:** `id`, `client_id`, `id_rec`, `due_day`, `periodicidade`, `status`, `created_at`, `updated_at`.
 - **Imutabilidade do vínculo:** `id_rec` representa um consentimento de ciclo específico; não migrar para outro `due_day`/`periodicidade`.
+- **Tabela customizada (config por cliente):** `mod_lknbbpix_client_auto_settings` (enable/disable Pix Automático por cliente).
+- **Campos em `mod_lknbbpix_client_auto_settings`:** `id`, `client_id`, `auto_enabled`, `created_at`, `updated_at`.
+  - `auto_enabled` (bool/tinyint): `1` = habilitado, `0` = desabilitado. Padrão efetivo: `true` quando não há registro.
+  - Leitura via `ClientAutoSettingsRepository::isEnabledForClient($clientId)` com fallback seguro.
 - **Tabelas WHMCS usadas diretamente:**
   - `tblinvoices` — status e userid da fatura
   - `tblorders` — relação fatura → pedido
   - `tblhosting` / `tblproducts` — identificação de produto pelo item da fatura
   - `tblconfiguration` — URL do sistema WHMCS
+
+---
+
+## Fluxo Administrativo
+
+### Painel de Cliente — Ações de Pix Automático
+
+O painel administrativo (`clientssummary.php`) oferece controles para gerenciar Pix Automático por cliente:
+
+- **`toggle-client-auto-pix`**: habilita/desabilita Pix Automático no nível do cliente.
+- **`cancel-auto-auth`**: cancela autorização individual (`idRec`) no Banco do Brasil e persiste `CANCELADA` localmente.
+
+Regras principais:
+
+1. Exigir `Auth::isAdminLogged(['Configure Payment Gateways'])`.
+2. Exigir token CSRF nativo do WHMCS (`window.csrfToken`) enviado no request.
+3. Em `cancel-auto-auth`, validar `idRec` com regex case-sensitive: `/^[A-Za-z0-9]{1,35}$/`.
+4. Em `toggle-client-auto-pix` para desabilitar, bloquear quando houver autorizações `CRIADA`/`APROVADA` ativas.
+
+### Segurança CSRF no Admin
+
+No contexto admin, o módulo utiliza token nativo do WHMCS combinado com autenticação de sessão:
+
+1. Frontend envia `csrfToken` (ou header `X-CSRF-TOKEN`).
+2. Backend aceita token com comprimento mínimo (`strlen >= 20`).
+3. A proteção efetiva é complementada por `Auth::isAdminLogged()` + same-origin do painel WHMCS.
+
+Diretriz operacional:
+
+- Não usar sessão custom para CSRF admin (`$_SESSION['lkn-bb-pix-admin']`).
+- Padronizar o uso do token nativo (`window.csrfToken` / `input[name="token"]`).
 
 ---
 
@@ -309,6 +393,9 @@ Todas as requisições adicionam `?gw-dev-app-key={developer_application_key}` n
 - **Não** usar `die()` ou `exit()` fora de `webhook.php` e verificações de segurança de arquivo.
 - **Não** implementar retry técnico de cobrança automática quando `politicaRetentativa = NAO_PERMITE`.
 - **Não** migrar `idRec` para outro `due_day`/`periodicidade`.
+- **Não** forçar maiúsculas/minúsculas em `idRec` (`strtoupper`/`strtolower`) antes de enviar ao BB.
+- **Não** validar `idRec` com regex apenas de maiúsculas (ex.: `^[A-Z0-9]+$`).
+- **Não** voltar a usar sessão custom para CSRF no admin.
 
 ---
 

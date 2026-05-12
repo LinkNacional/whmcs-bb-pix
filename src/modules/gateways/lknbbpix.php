@@ -103,6 +103,20 @@ function lknbbpix_config()
                 });
             }
         }
+
+        if (!Capsule::schema()->hasTable('mod_lknbbpix_client_auto_settings')) {
+            Capsule::schema()->create(
+                'mod_lknbbpix_client_auto_settings',
+                function ($table): void {
+                    /** @var Illuminate\Database\Schema\Blueprint $table */
+                    $table->increments('id');
+                    $table->unsignedInteger('client_id')->unique();
+                    $table->boolean('auto_enabled')->default(true);
+                    $table->dateTime('created_at')->useCurrent();
+                    $table->dateTime('updated_at')->useCurrent();
+                }
+            );
+        }
     } catch (Exception $e) {
         echo "Unable to create gateway tables: {$e->getMessage()}";
     }

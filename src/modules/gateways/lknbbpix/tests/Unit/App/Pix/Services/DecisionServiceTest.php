@@ -3,6 +3,7 @@
 namespace Lkn\BBPix\Tests\Unit\App\Pix\Services;
 
 use Lkn\BBPix\App\Pix\Repositories\AuthRepository;
+use Lkn\BBPix\App\Pix\Repositories\ClientAutoSettingsRepositoryInterface;
 use Lkn\BBPix\App\Pix\Services\DecisionService;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
@@ -33,6 +34,12 @@ final class DecisionServiceTest extends TestCase
         string $expectedDecision
     ): void {
         $authRepository = $this->createMock(AuthRepository::class);
+        $clientAutoSettingsRepository = $this->createMock(ClientAutoSettingsRepositoryInterface::class);
+
+        $clientAutoSettingsRepository->expects(self::once())
+            ->method('isEnabledForClient')
+            ->with(10)
+            ->willReturn(true);
 
         $authRepository->expects(self::once())
             ->method('findApprovedByClientAndDueDay')
@@ -44,7 +51,7 @@ final class DecisionServiceTest extends TestCase
                 ]
             ]);
 
-        $service = new DecisionService($authRepository);
+        $service = new DecisionService($authRepository, $clientAutoSettingsRepository);
 
         self::assertSame($expectedDecision, $service->evaluate($origemFatura, 10, 15, '2099-12-31'));
     }
@@ -83,6 +90,12 @@ final class DecisionServiceTest extends TestCase
     public function testEvaluateReturnsManualTraditionalWhenRepositoryReturnsFailure(): void
     {
         $authRepository = $this->createMock(AuthRepository::class);
+        $clientAutoSettingsRepository = $this->createMock(ClientAutoSettingsRepositoryInterface::class);
+
+        $clientAutoSettingsRepository->expects(self::once())
+            ->method('isEnabledForClient')
+            ->with(10)
+            ->willReturn(true);
 
         $authRepository->expects(self::once())
             ->method('findApprovedByClientAndDueDay')
@@ -91,7 +104,7 @@ final class DecisionServiceTest extends TestCase
                 'data' => ['reason' => 'db offline']
             ]);
 
-        $service = new DecisionService($authRepository);
+        $service = new DecisionService($authRepository, $clientAutoSettingsRepository);
 
         self::assertSame(
             DecisionService::MANUAL_TRADICIONAL,
@@ -104,11 +117,36 @@ final class DecisionServiceTest extends TestCase
         $GLOBALS['lknbbpix_gateway_variables']['enable_pix_automatic'] = 'off';
 
         $authRepository = $this->createMock(AuthRepository::class);
+        $clientAutoSettingsRepository = $this->createMock(ClientAutoSettingsRepositoryInterface::class);
 
         $authRepository->expects(self::never())
             ->method('findApprovedByClientAndDueDay');
 
-        $service = new DecisionService($authRepository);
+        $clientAutoSettingsRepository->expects(self::never())
+            ->method('isEnabledForClient');
+
+        $service = new DecisionService($authRepository, $clientAutoSettingsRepository);
+
+        self::assertSame(
+            DecisionService::MANUAL_TRADICIONAL,
+            $service->evaluate('CRON_RENOVACAO', 10, 15)
+        );
+    }
+
+    public function testEvaluateReturnsManualTraditionalWhenClientAutoPixIsDisabled(): void
+    {
+        $authRepository = $this->createMock(AuthRepository::class);
+        $clientAutoSettingsRepository = $this->createMock(ClientAutoSettingsRepositoryInterface::class);
+
+        $clientAutoSettingsRepository->expects(self::once())
+            ->method('isEnabledForClient')
+            ->with(10)
+            ->willReturn(false);
+
+        $authRepository->expects(self::never())
+            ->method('findApprovedByClientAndDueDay');
+
+        $service = new DecisionService($authRepository, $clientAutoSettingsRepository);
 
         self::assertSame(
             DecisionService::MANUAL_TRADICIONAL,
@@ -119,12 +157,18 @@ final class DecisionServiceTest extends TestCase
     public function testEvaluateReturnsManualTraditionalWhenRepositoryThrowsException(): void
     {
         $authRepository = $this->createMock(AuthRepository::class);
+        $clientAutoSettingsRepository = $this->createMock(ClientAutoSettingsRepositoryInterface::class);
+
+        $clientAutoSettingsRepository->expects(self::once())
+            ->method('isEnabledForClient')
+            ->with(10)
+            ->willReturn(true);
 
         $authRepository->expects(self::once())
             ->method('findApprovedByClientAndDueDay')
             ->willThrowException(new RuntimeException('db offline'));
 
-        $service = new DecisionService($authRepository);
+        $service = new DecisionService($authRepository, $clientAutoSettingsRepository);
 
         self::assertSame(
             DecisionService::MANUAL_TRADICIONAL,
