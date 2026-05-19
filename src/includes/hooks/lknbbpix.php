@@ -316,18 +316,12 @@ add_hook('UpdateAdminPaymentGateway', 1, function (array $vars): void {
     }
 });
 
-add_hook('DailyCronJob', 1, function (): void { // PreCronJob Alterado
+add_hook('AdminAreaClientSummaryPage', 1, function (): void { //AdminAreaClientSummaryPage PreCronJob InvoiceCreationPreEmail DailyCronJob
     $batchLimit = 50;
     $hoursThreshold = 24;
 
     try {
-        // Garantir que o diretório de templates compilados está configurado corretamente
-        // em contexto de cron para evitar tentativa de criar /root/templates_c
-        if (defined('WHMCS_COMPILEDIR') && !defined('SMARTY_COMPILEDIR')) {
-            define('SMARTY_COMPILEDIR', WHMCS_COMPILEDIR);
-        }
         $authRepository = new AuthRepository();
-        $pixAutoRepository = new PixAutoRepository();
 
         $staleResponse = $authRepository->findCreatedOlderThanHours($hoursThreshold, $batchLimit);
 
@@ -342,6 +336,16 @@ add_hook('DailyCronJob', 1, function (): void { // PreCronJob Alterado
         }
 
         $auths = (array) ($staleResponse['data']['auths'] ?? []);
+
+        // Otimização: Se não há registros, finaliza a execução do hook aqui
+        // antes de instanciar a API e autenticar no banco
+        if (empty($auths)) {
+            return;
+        }
+
+        // Instancia a classe que consome a API (e autentica) apenas se houver demanda
+        $pixAutoRepository = new PixAutoRepository();
+
         $summary = [
             'candidates' => count($auths),
             'updated_status' => 0,
@@ -358,48 +362,10 @@ add_hook('DailyCronJob', 1, function (): void { // PreCronJob Alterado
 
                 if ($idRec === '') {
                     $summary['errors']++;
-
-                    Logger::log(
-                        'DEBUG PreCronJob: id_rec vazio',
-                        [
-                            'auth_id' => (int) ($auth->id ?? 0),
-                            'client_id' => (int) ($auth->client_id ?? 0),
-                            'id_rec_raw' => (string) ($auth->id_rec ?? 'null'),
-                            'id_rec_type' => gettype($auth->id_rec ?? null),
-                            'id_rec_strlen' => strlen((string) ($auth->id_rec ?? '')),
-                        ],
-                        []
-                    );
-
                     continue;
                 }
 
-                Logger::log(
-                    'DEBUG PreCronJob: antes de cancelarRecorrencia',
-                    [
-                        'auth_id' => (int) ($auth->id ?? 0),
-                        'idRec_strlen' => strlen($idRec),
-                        'idRec_prefix' => substr($idRec, 0, 6) . '...',
-                    ],
-                    []
-                );
-
                 $cancelResponse = $pixAutoRepository->cancelarRecorrencia($idRec, 10);
-
-                Logger::log(
-                    'DEBUG PreCronJob: cancelResponse recebido',
-                    [
-                        'auth_id' => (int) ($auth->id ?? 0),
-                        'idRec_prefix' => substr($idRec, 0, 6) . '...',
-                    ],
-                    [
-                        'response_type' => gettype($cancelResponse),
-                        'response_success' => is_array($cancelResponse) ? ($cancelResponse['success'] ?? 'n/a') : 'not_array',
-                        'response_keys' => is_array($cancelResponse) ? array_keys($cancelResponse) : [],
-                        'data_keys' => is_array($cancelResponse) && isset($cancelResponse['data']) && is_array($cancelResponse['data']) ? array_keys($cancelResponse['data']) : [],
-                    ]
-                );
-
                 $finalStatus = lknbbpix_extract_final_cancel_status($cancelResponse);
 
                 if (in_array($finalStatus, ['CANCELADA', 'REVOGADA'], true)) {
