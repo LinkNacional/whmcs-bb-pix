@@ -1,6 +1,6 @@
 # WHMCS BB Pix
 
-Modulo de gateway de pagamento [WHMCS Pix](https://www.linknacional.com.br/whmcs/gateways/pix/banco-brasil/) Automático para WHMCS com integracao ao Banco do Brasil.
+Modulo de gateway de pagamento [WHMCS Pix](https://www.linknacional.com.br/whmcs/gateways/pix/banco-brasil/) Automático para [WHMCS](https://www.linknacional.com.br/whmcs/) com integracao ao Banco do Brasil.
 
 Este README foi escrito para administradores de WHMCS, equipes de suporte e times tecnicos que precisam instalar, configurar, atualizar, validar e remover o modulo com seguranca.
 
